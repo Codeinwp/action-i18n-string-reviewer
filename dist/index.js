@@ -51690,33 +51690,69 @@ class LLMMatcher {
       // Create a compact list to save tokens
       const existingList = limitedBaseStrings.map((s, i) => `${i + 1}. ${s}`).join('\n');
       
-      const prompt = `You are a translation string matcher. Find the best existing string to reuse for a new translation.
+      const prompt = `TASK: Find the best existing string that could replace this new string.
 
-NEW STRING:
+NEW STRING TO MATCH:
 "${newString}"
 
-EXISTING STRINGS:
+EXISTING STRINGS DATABASE:
 ${existingList}
 
-MATCHING RULES (in priority order):
-1. Exact match (case-insensitive)
-2. Same meaning with placeholder differences: "Activating %s" ≈ "Activating" 
-3. Singular/plural variants: "Settings" ≈ "Setting"
-4. Verbose vs concise (same action): "Go to Settings" ≈ "Settings"
-5. Synonyms for UI actions: "Show" ≈ "Display", "Edit" ≈ "Modify"
-6. Same core words in different order: "Edit Settings" ≈ "Settings Editor"
-7. Key terms match: "Header Background Color" could use "Background Color"
+MATCHING RULES (Priority Order):
 
-DO NOT MATCH:
-- Completely different topics or actions
-- Different UI contexts (e.g., "Close" button vs "Close the gap")
+HIGH PRIORITY MATCHES:
+1. **Exact match** (case-insensitive) - Perfect duplicates
+   Example: "Settings" = "settings" = "SETTINGS"
 
-RESPONSE:
+2. **Placeholder variations** - Same text with/without placeholders
+   Example: "Activating %s" ≈ "Activating" ≈ "Activating %1$s plugin"
+   Rationale: Placeholder differences don't affect base meaning
+
+3. **Singular/plural forms** - Grammatical number variations
+   Example: "Comment" ≈ "Comments", "Setting" ≈ "Settings"
+   Rationale: Often interchangeable in UI contexts
+
+MEDIUM PRIORITY MATCHES:
+4. **Conciseness variations** - Verbose vs concise same action
+   Example: "Go to Settings" ≈ "Settings", "Click to Edit" ≈ "Edit"
+   Rationale: Button/link text often gets shortened in refactors
+
+5. **Synonym substitution** - Common UI action synonyms
+   Examples:
+   - "Show" ≈ "Display" ≈ "View"
+   - "Edit" ≈ "Modify" ≈ "Change"
+   - "Remove" ≈ "Delete" ≈ "Erase"
+   - "Create" ≈ "Add" ≈ "New"
+   Rationale: Same user action, different wording
+
+6. **Word order changes** - Same terms, different arrangement
+   Example: "Edit Settings" ≈ "Settings Editor" ≈ "Settings to Edit"
+   Rationale: Refactoring often changes phrasing but not meaning
+
+LOW PRIORITY MATCHES:
+7. **Subset/superset** - One string contains the other meaningfully
+   Example: "Background Color" could match "Header Background Color"
+   Rationale: More specific string might be usable if context matches
+
+8. **Semantic equivalence** - Different words, same concept
+   Example: "No items found" ≈ "Nothing to display" ≈ "Empty list"
+   Rationale: Conveys identical information to user
+
+NEVER MATCH:
+❌ Different topics entirely ("Close" button vs "Close the gap")
+❌ Different UI contexts ("Edit post" vs "Edit comment")
+❌ Opposite meanings ("Enable" vs "Disable")
+❌ Different data types ("User name" vs "Username field")
+❌ Technical vs user-facing ("Debug mode" vs "Developer tools")
+
+RESPONSE FORMAT:
 Return ONLY valid JSON with the EXACT text from the existing list:
 {"match": "exact text from list"}
 
 If no suitable match exists:
-{"match": null}`;
+{"match": null}
+
+Remember: Use EXACT text from the existing strings list (line 1-${limitedBaseStrings.length}).`;
 
       // Debug logging
       if (process.env.DEBUG_LLM === 'true') {
@@ -51728,9 +51764,30 @@ If no suitable match exists:
         console.log('Prompt:\n---\n' + prompt + '\n---\n');
       }
 
+      // System prompt defines the role and guidelines
+      const systemPrompt = `You are an expert translation string matcher specialized in i18n (internationalization) workflows. Your role is to analyze new translatable strings and find the best existing string that could be reused, helping reduce translation costs and maintain consistency.
+
+CORE PRINCIPLES:
+- Prioritize semantic equivalence over exact wording
+- Consider UI/UX context and user-facing intent
+- Recognize that reusing existing strings preserves translations
+- Be conservative: only match when confident the strings serve the same purpose
+
+MATCHING PHILOSOPHY:
+Translation strings often evolve through refactoring, but their meaning remains constant. A string like "Edit Settings" might be shortened to "Settings" in a button context, or "Activating %s plugin" might become "Activating %s". These should match because they represent the same translatable concept.
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid JSON
+- Use the exact text from the provided existing strings list
+- If no suitable match exists, return null`;
+
       const data = JSON.stringify({
         model: model,
         messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
           {
             role: 'user',
             content: prompt
@@ -51738,7 +51795,23 @@ If no suitable match exists:
         ],
         temperature: 0,
         max_tokens: 100,
-        response_format: { type: 'json_object' }
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'string_match',
+            schema: {
+              type: 'object',
+              properties: {
+                match: {
+                  type: ['string', 'null'],
+                  description: 'The exact matching string from the existing strings list, or null if no match found'
+                }
+              },
+              required: ['match'],
+              additionalProperties: false
+            }
+          }
+        }
       });
 
       const options = {
@@ -51812,6 +51885,10 @@ If no suitable match exists:
                   cleanMatch.includes(s)
                 );
                 
+                if (process.env.DEBUG_LLM === 'true') {
+                  console.log(`✅ Match found: "${cleanMatch}"`);
+                }
+                
                 if (!matchExists && process.env.DEBUG_LLM === 'true') {
                   console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
                 }
@@ -51822,6 +51899,7 @@ If no suitable match exists:
               // Fallback if JSON parsing fails
               if (process.env.DEBUG_LLM === 'true') {
                 console.log('⚠️  Failed to parse JSON response:', content);
+                console.log('⚠️  Parse error:', parseError.message);
               }
               resolve({ error: 'Invalid JSON response' });
             }
