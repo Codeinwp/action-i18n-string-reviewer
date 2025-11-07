@@ -2,6 +2,7 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const { POTComparator } = require('./comparator');
 const { Reporter } = require('./reporter');
+const { LLMMatcher } = require('./llm-matcher');
 const fs = require('fs');
 const path = require('path');
 
@@ -118,6 +119,11 @@ async function run() {
       } catch (error) {
         core.warning(`Failed to comment on PR: ${error.message}`);
       }
+    }
+
+    // Save LLM cache if it was used
+    if (openrouterKey) {
+      await LLMMatcher.saveCache();
     }
 
     // Fail if requested and changes detected

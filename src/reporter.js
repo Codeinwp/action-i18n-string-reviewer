@@ -84,10 +84,10 @@ class Reporter {
 
   static async generateMarkdownReport(results, baseEntries, openrouterKey, openrouterModel) {
     const lines = [];
-    lines.push('# 🌍 i18n String Review Report\n');
+    lines.push('## 🌍 i18n String Review Report\n');
 
     if (results.totalChanges === 0) {
-      lines.push('## ✅ No changes detected\n');
+      lines.push('### ✅ No changes detected\n');
       lines.push('The POT files are identical.');
       return lines.join('\n');
     }
@@ -96,7 +96,7 @@ class Reporter {
     const baseEntriesArray = baseEntries ? Array.from(baseEntries.values()) : [];
 
     // Summary table
-    lines.push('## 📊 Summary\n');
+    lines.push('### 📊 Summary\n');
     lines.push('| Category | Count |');
     lines.push('|----------|-------|');
     lines.push(`| ➕ Added | ${results.addedCount} |`);
@@ -106,27 +106,19 @@ class Reporter {
 
     // Added strings table
     if (results.added.length > 0) {
-      lines.push('<details>');
-      lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location | Words | Suggested Match |');
-      lines.push('|--------|---------|--------|----------|-------|-----------------|');
-
+      // First, collect all entries with their LLM suggestions
+      const entriesWithData = [];
       let totalWords = 0;
       const limit = Math.min(results.added.length, 100);
+      
       for (let i = 0; i < limit; i++) {
         const entry = results.added[i];
-        const msgid = this._truncate(entry.msgid, 50);
-        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
-        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
-        const references = this._parseReferences(entry.comments.reference);
-        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
-        
-        // Count words in msgid and plural
         const wordCount = this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
         totalWords += wordCount;
         
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
+        let hasSuggestion = false;
         if (openrouterKey && baseEntriesArray.length > 0) {
           try {
             const matchResult = await LLMMatcher.findBestMatch(
@@ -139,7 +131,8 @@ class Reporter {
             if (matchResult.error) {
               suggestedMatch = `LLM Error: ${matchResult.error}`;
             } else if (matchResult.match) {
-              suggestedMatch = this._truncate(matchResult.match, 40);
+              suggestedMatch = matchResult.match; // Full string, not truncated
+              hasSuggestion = true;
             } else {
               suggestedMatch = 'No close match';
             }
@@ -151,7 +144,34 @@ class Reporter {
           }
         }
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} | ${suggestedMatch} |`);
+        entriesWithData.push({
+          entry,
+          wordCount,
+          suggestedMatch,
+          hasSuggestion
+        });
+      }
+      
+      // Sort: entries with suggestions first, then the rest
+      entriesWithData.sort((a, b) => {
+        if (a.hasSuggestion && !b.hasSuggestion) return -1;
+        if (!a.hasSuggestion && b.hasSuggestion) return 1;
+        return 0;
+      });
+      
+      // Now render the table
+      lines.push('<details>');
+      lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Location | Words | Suggested Match |');
+      lines.push('|--------|----------|-------|-----------------|');
+      
+      for (const data of entriesWithData) {
+        const entry = data.entry;
+        const msgid = this._truncate(entry.msgid, 50);
+        const references = this._parseReferences(entry.comments.reference);
+        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
+        
+        lines.push(`| ${msgid} | ${location} | ${data.wordCount} | ${data.suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -161,11 +181,11 @@ class Reporter {
       }
 
       if (results.added.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* | ... |`);
+        lines.push(`| ... | ... | *and ${results.added.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** | |`);
+      lines.push(`| **Total** | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -174,23 +194,21 @@ class Reporter {
     if (results.removed.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>➖ Removed Strings (${results.removed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location |');
-      lines.push('|--------|---------|--------|----------|');
+      lines.push('| String | Location |');
+      lines.push('|--------|----------|');
 
       const limit = Math.min(results.removed.length, 100);
       for (let i = 0; i < limit; i++) {
         const entry = results.removed[i];
         const msgid = this._truncate(entry.msgid, 50);
-        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
-        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
         const references = this._parseReferences(entry.comments.reference);
         const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} |`);
+        lines.push(`| ${msgid} | ${location} |`);
       }
 
       if (results.removed.length > 100) {
-        lines.push(`| ... | ... | ... | *and ${results.removed.length - 100} more* |`);
+        lines.push(`| ... | *and ${results.removed.length - 100} more* |`);
       }
 
       lines.push('\n</details>\n');
@@ -198,17 +216,13 @@ class Reporter {
 
     // Changed strings table
     if (results.changed.length > 0) {
-      lines.push('<details>');
-      lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Existing | Changed | Words | Suggested Match |');
-      lines.push('|--------|---------|----------|---------|-------|-----------------|');
-
+      // First, collect all entries with their LLM suggestions
+      const entriesWithData = [];
       let totalWords = 0;
       const limit = Math.min(results.changed.length, 100);
+      
       for (let i = 0; i < limit; i++) {
         const { base, target } = results.changed[i];
-        const msgid = this._truncate(base.msgid, 40);
-        const context = base.msgctxt ? this._truncate(base.msgctxt, 20) : '-';
         
         // Count words - use target (new) values
         const wordCount = this._countWords(target.msgid) + this._countWords(target.msgidPlural);
@@ -243,6 +257,7 @@ class Reporter {
         
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
+        let hasSuggestion = false;
         if (openrouterKey && baseEntriesArray.length > 0) {
           try {
             const matchResult = await LLMMatcher.findBestMatch(
@@ -255,7 +270,8 @@ class Reporter {
             if (matchResult.error) {
               suggestedMatch = `LLM Error: ${matchResult.error}`;
             } else if (matchResult.match) {
-              suggestedMatch = this._truncate(matchResult.match, 40);
+              suggestedMatch = matchResult.match; // Full string, not truncated
+              hasSuggestion = true;
             } else {
               suggestedMatch = 'No close match';
             }
@@ -267,7 +283,34 @@ class Reporter {
           }
         }
         
-        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} | ${suggestedMatch} |`);
+        entriesWithData.push({
+          base,
+          target,
+          wordCount,
+          existing,
+          changed,
+          suggestedMatch,
+          hasSuggestion
+        });
+      }
+      
+      // Sort: entries with suggestions first, then the rest
+      entriesWithData.sort((a, b) => {
+        if (a.hasSuggestion && !b.hasSuggestion) return -1;
+        if (!a.hasSuggestion && b.hasSuggestion) return 1;
+        return 0;
+      });
+      
+      // Now render the table
+      lines.push('<details>');
+      lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Existing | Changed | Words | Suggested Match |');
+      lines.push('|--------|----------|---------|-------|-----------------|');
+      
+      for (const data of entriesWithData) {
+        const msgid = this._truncate(data.base.msgid, 40);
+        
+        lines.push(`| ${msgid} | ${data.existing} | ${data.changed} | ${data.wordCount} | ${data.suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -277,11 +320,11 @@ class Reporter {
       }
 
       if (results.changed.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
+        lines.push(`| ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** | |`);
+      lines.push(`| **Total** | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }

@@ -78,6 +78,25 @@ The **Suggested Match** column will show:
 - "No close match" if no similar string exists
 - "LLM Error: {reason}" if the API call fails
 
+Get your OpenRouter API key at [openrouter.ai](https://openrouter.ai/).
+
+### LLM Result Caching
+
+The action automatically caches LLM results using GitHub Actions cache to avoid redundant API calls. This cache:
+
+- **Persists between workflow runs** - Stored in GitHub's cache infrastructure
+- **Saves API costs** - Same strings won't be analyzed twice
+- **Speeds up workflow** - Instant results for cached strings  
+- **No repository changes** - Cache doesn't pollute git history
+- **Automatic expiration** - GitHub automatically manages cache lifecycle (7 days)
+
+The cache works automatically - no configuration needed! On each run:
+1. Action restores previous LLM results from GitHub cache
+2. New API calls are made only for uncached strings
+3. Updated cache is saved back to GitHub
+
+Cache is stored with key `llm-cache-default-v1`. You can clear it by manually deleting caches in your repository settings.
+
 ## Report Format
 
 The action generates a detailed report with:

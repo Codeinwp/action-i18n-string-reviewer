@@ -1,6 +1,28 @@
 const https = require('https');
+const { LLMCache } = require('./llm-cache');
 
 class LLMMatcher {
+  static cache = null;
+
+  /**
+   * Initialize cache
+   */
+  static async initCache(cacheFilePath = '.llm-cache.json') {
+    if (!this.cache) {
+      this.cache = new LLMCache(cacheFilePath);
+      await this.cache.load();
+    }
+    return this.cache;
+  }
+
+  /**
+   * Save cache
+   */
+  static async saveCache() {
+    if (this.cache) {
+      await this.cache.save();
+    }
+  }
   /**
    * Call OpenRouter API to find best matching string
    * @param {string} apiKey - OpenRouter API key
@@ -17,20 +39,33 @@ class LLMMatcher {
       // Create a compact list to save tokens
       const existingList = limitedBaseStrings.map((s, i) => `${i + 1}. ${s}`).join('\n');
       
-      const prompt = `Find matching translation string with same meaning.
-NEW: "${newString}"
+      const prompt = `You are a translation string matcher. Find the best existing string to reuse for a new translation.
 
-EXISTING:
+NEW STRING:
+"${newString}"
+
+EXISTING STRINGS:
 ${existingList}
 
-Match ONLY if nearly identical meaning. Examples of valid matches:
-- "Button Settings" matches "Button Setting"
-- "Show Header" matches "Display Header"
-- "Primary Color" matches "Primary Colour"
+MATCHING RULES (in priority order):
+1. Exact match (case-insensitive)
+2. Same meaning with placeholder differences: "Activating %s" ≈ "Activating" 
+3. Singular/plural variants: "Settings" ≈ "Setting"
+4. Verbose vs concise (same action): "Go to Settings" ≈ "Settings"
+5. Synonyms for UI actions: "Show" ≈ "Display", "Edit" ≈ "Modify"
+6. Same core words in different order: "Edit Settings" ≈ "Settings Editor"
+7. Key terms match: "Header Background Color" could use "Background Color"
 
-Different topic or unrelated = NO_MATCH.
+DO NOT MATCH:
+- Completely different topics or actions
+- Different UI contexts (e.g., "Close" button vs "Close the gap")
 
-Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
+RESPONSE:
+Return ONLY valid JSON with the EXACT text from the existing list:
+{"match": "exact text from list"}
+
+If no suitable match exists:
+{"match": null}`;
 
       // Debug logging
       if (process.env.DEBUG_LLM === 'true') {
@@ -51,7 +86,8 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
           }
         ],
         temperature: 0,
-        max_tokens: 50
+        max_tokens: 100,
+        response_format: { type: 'json_object' }
       });
 
       const options = {
@@ -109,37 +145,34 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
               return;
             }
 
-            if (content === 'NO_MATCH' || content.includes('NO_MATCH')) {
-              resolve({ match: null });
-            } else {
-              // Clean up the response - remove quotes, numbers, and extra text
-              let cleanMatch = content.replace(/^["']|["']$/g, '').trim();
+            // Parse JSON response
+            try {
+              const jsonResponse = JSON.parse(content);
               
-              // If response includes a number prefix (e.g., "5. Login Customizer"), extract just the string
-              const numberMatch = cleanMatch.match(/^\d+\.\s*(.+)/);
-              if (numberMatch) {
-                cleanMatch = numberMatch[1].trim();
+              if (jsonResponse.match === null || !jsonResponse.match) {
+                resolve({ match: null });
+              } else {
+                const cleanMatch = jsonResponse.match.trim();
+                
+                // Validate: the match should exist in the base strings
+                const matchExists = limitedBaseStrings.some(s => 
+                  s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
+                  s.includes(cleanMatch) ||
+                  cleanMatch.includes(s)
+                );
+                
+                if (!matchExists && process.env.DEBUG_LLM === 'true') {
+                  console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
+                }
+                
+                resolve({ match: cleanMatch });
               }
-              
-              // Remove any trailing explanations or comments (text after period, comma, etc.)
-              // But be careful not to break strings that legitimately contain punctuation
-              const firstSentenceEnd = cleanMatch.search(/\.\s+[A-Z]/); // Period followed by space and capital
-              if (firstSentenceEnd > 0) {
-                cleanMatch = cleanMatch.substring(0, firstSentenceEnd).trim();
+            } catch (parseError) {
+              // Fallback if JSON parsing fails
+              if (process.env.DEBUG_LLM === 'true') {
+                console.log('⚠️  Failed to parse JSON response:', content);
               }
-              
-              // Validate: the match should exist in the base strings
-              const matchExists = limitedBaseStrings.some(s => 
-                s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
-                s.includes(cleanMatch) ||
-                cleanMatch.includes(s)
-              );
-              
-              if (!matchExists && process.env.DEBUG_LLM === 'true') {
-                console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
-              }
-              
-              resolve({ match: cleanMatch });
+              resolve({ error: 'Invalid JSON response' });
             }
           } catch (error) {
             resolve({ error: 'Parse error' });
@@ -173,6 +206,20 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
   static async findBestMatch(newString, baseEntries, apiKey, model) {
     if (!apiKey || !apiKey.trim()) {
       return { match: null };
+    }
+    
+    // Initialize cache if not already done
+    if (!this.cache) {
+      await this.initCache();
+    }
+    
+    // Check cache first
+    const cached = this.cache.get(newString, model);
+    if (cached) {
+      if (process.env.DEBUG_LLM === 'true') {
+        console.log(`📦 Cache hit for: "${newString.substring(0, 50)}"`);
+      }
+      return cached.result;
     }
     
     // Validate API key format
@@ -214,15 +261,16 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
         
         const result = await this.callOpenRouter(apiKey, model, newString, batch);
         
-        // If we found a match, return it immediately
+        // If we found a match, cache it and return
         if (result.match) {
           if (process.env.DEBUG_LLM === 'true') {
             console.log(`✅ Found match in batch ${i + 1}`);
           }
+          this.cache.set(newString, model, result);
           return result;
         }
         
-        // If there was an error, return it
+        // If there was an error, return it (don't cache errors)
         if (result.error) {
           return result;
         }
@@ -240,7 +288,9 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
       }
       
       // No match found in any batch
-      return { match: null };
+      const result = { match: null };
+      this.cache.set(newString, model, result);
+      return result;
     } catch (error) {
       // Re-throw to stop execution
       throw error;

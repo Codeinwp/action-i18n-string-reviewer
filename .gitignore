@@ -30,6 +30,9 @@ Thumbs.db
 output.json
 output.md
 
+# LLM cache (local file, not committed - GitHub Actions uses @actions/cache)
+.llm-cache.json
+
 # Note: dist/ is NOT ignored because GitHub Actions needs it
 # We commit the compiled dist/index.js file
 

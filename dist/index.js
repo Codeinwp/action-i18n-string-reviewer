@@ -43425,12 +43425,169 @@ module.exports = { POTComparator, POTEntry };
 
 /***/ }),
 
+/***/ 1581:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const crypto = __nccwpck_require__(6982);
+const cache = __nccwpck_require__(2167);
+
+class LLMCache {
+  constructor(cacheFilePath = '.llm-cache.json') {
+    this.cacheFilePath = cacheFilePath;
+    this.cache = {};
+    this.modified = false;
+  }
+
+  /**
+   * Generate a cache key from the new string and model
+   */
+  static generateKey(newString, model) {
+    const hash = crypto.createHash('md5').update(`${newString}:${model}`).digest('hex');
+    return hash;
+  }
+
+  /**
+   * Generate GitHub Actions cache key based on model
+   */
+  static getActionsCacheKey(model) {
+    return `llm-cache-${model}-v1`;
+  }
+
+  /**
+   * Load cache from file (and optionally from GitHub Actions cache)
+   */
+  async load() {
+    // Try to restore from GitHub Actions cache first
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      try {
+        const cacheKey = LLMCache.getActionsCacheKey('default');
+        const restoreKeys = [
+          'llm-cache-',  // Match any model cache
+        ];
+        
+        const restoredKey = await cache.restoreCache([this.cacheFilePath], cacheKey, restoreKeys);
+        if (restoredKey) {
+          console.log(`📦 Restored cache from GitHub Actions: ${restoredKey}`);
+        }
+      } catch (error) {
+        // Cache restore failed, continue with local file
+        console.log('ℹ️  No GitHub Actions cache found, starting fresh');
+      }
+    }
+
+    // Load from local file
+    try {
+      if (fs.existsSync(this.cacheFilePath)) {
+        const data = fs.readFileSync(this.cacheFilePath, 'utf8');
+        this.cache = JSON.parse(data);
+        console.log(`📦 Loaded ${Object.keys(this.cache).length} cached LLM results`);
+      }
+    } catch (error) {
+      console.warn('⚠️  Failed to load LLM cache from file:', error.message);
+      this.cache = {};
+    }
+  }
+
+  /**
+   * Save cache to file (and optionally to GitHub Actions cache)
+   */
+  async save() {
+    if (!this.modified) {
+      return; // No changes, skip save
+    }
+
+    // Save to local file first
+    try {
+      const data = JSON.stringify(this.cache, null, 2);
+      fs.writeFileSync(this.cacheFilePath, data, 'utf8');
+      console.log(`💾 Saved ${Object.keys(this.cache).length} LLM results to cache`);
+    } catch (error) {
+      console.warn('⚠️  Failed to save LLM cache to file:', error.message);
+      return;
+    }
+
+    // Save to GitHub Actions cache if available
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      try {
+        const cacheKey = LLMCache.getActionsCacheKey('default');
+        await cache.saveCache([this.cacheFilePath], cacheKey);
+        console.log(`💾 Saved cache to GitHub Actions: ${cacheKey}`);
+      } catch (error) {
+        // Cache save failed, but local file is saved
+        console.log('ℹ️  Could not save to GitHub Actions cache (may already exist)');
+      }
+    }
+  }
+
+  /**
+   * Get cached result
+   */
+  get(newString, model) {
+    const key = LLMCache.generateKey(newString, model);
+    return this.cache[key] || null;
+  }
+
+  /**
+   * Set cached result
+   */
+  set(newString, model, result) {
+    const key = LLMCache.generateKey(newString, model);
+    this.cache[key] = {
+      newString: newString,
+      model: model,
+      result: result,
+      timestamp: new Date().toISOString()
+    };
+    this.modified = true;
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getStats() {
+    return {
+      totalEntries: Object.keys(this.cache).length,
+      modified: this.modified
+    };
+  }
+}
+
+module.exports = { LLMCache };
+
+
+
+/***/ }),
+
 /***/ 2461:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const https = __nccwpck_require__(5692);
+const { LLMCache } = __nccwpck_require__(1581);
 
 class LLMMatcher {
+  static cache = null;
+
+  /**
+   * Initialize cache
+   */
+  static async initCache(cacheFilePath = '.llm-cache.json') {
+    if (!this.cache) {
+      this.cache = new LLMCache(cacheFilePath);
+      await this.cache.load();
+    }
+    return this.cache;
+  }
+
+  /**
+   * Save cache
+   */
+  static async saveCache() {
+    if (this.cache) {
+      await this.cache.save();
+    }
+  }
   /**
    * Call OpenRouter API to find best matching string
    * @param {string} apiKey - OpenRouter API key
@@ -43447,20 +43604,33 @@ class LLMMatcher {
       // Create a compact list to save tokens
       const existingList = limitedBaseStrings.map((s, i) => `${i + 1}. ${s}`).join('\n');
       
-      const prompt = `Find matching translation string with same meaning.
-NEW: "${newString}"
+      const prompt = `You are a translation string matcher. Find the best existing string to reuse for a new translation.
 
-EXISTING:
+NEW STRING:
+"${newString}"
+
+EXISTING STRINGS:
 ${existingList}
 
-Match ONLY if nearly identical meaning. Examples of valid matches:
-- "Button Settings" matches "Button Setting"
-- "Show Header" matches "Display Header"
-- "Primary Color" matches "Primary Colour"
+MATCHING RULES (in priority order):
+1. Exact match (case-insensitive)
+2. Same meaning with placeholder differences: "Activating %s" ≈ "Activating" 
+3. Singular/plural variants: "Settings" ≈ "Setting"
+4. Verbose vs concise (same action): "Go to Settings" ≈ "Settings"
+5. Synonyms for UI actions: "Show" ≈ "Display", "Edit" ≈ "Modify"
+6. Same core words in different order: "Edit Settings" ≈ "Settings Editor"
+7. Key terms match: "Header Background Color" could use "Background Color"
 
-Different topic or unrelated = NO_MATCH.
+DO NOT MATCH:
+- Completely different topics or actions
+- Different UI contexts (e.g., "Close" button vs "Close the gap")
 
-Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
+RESPONSE:
+Return ONLY valid JSON with the EXACT text from the existing list:
+{"match": "exact text from list"}
+
+If no suitable match exists:
+{"match": null}`;
 
       // Debug logging
       if (process.env.DEBUG_LLM === 'true') {
@@ -43481,7 +43651,8 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
           }
         ],
         temperature: 0,
-        max_tokens: 50
+        max_tokens: 100,
+        response_format: { type: 'json_object' }
       });
 
       const options = {
@@ -43539,37 +43710,34 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
               return;
             }
 
-            if (content === 'NO_MATCH' || content.includes('NO_MATCH')) {
-              resolve({ match: null });
-            } else {
-              // Clean up the response - remove quotes, numbers, and extra text
-              let cleanMatch = content.replace(/^["']|["']$/g, '').trim();
+            // Parse JSON response
+            try {
+              const jsonResponse = JSON.parse(content);
               
-              // If response includes a number prefix (e.g., "5. Login Customizer"), extract just the string
-              const numberMatch = cleanMatch.match(/^\d+\.\s*(.+)/);
-              if (numberMatch) {
-                cleanMatch = numberMatch[1].trim();
+              if (jsonResponse.match === null || !jsonResponse.match) {
+                resolve({ match: null });
+              } else {
+                const cleanMatch = jsonResponse.match.trim();
+                
+                // Validate: the match should exist in the base strings
+                const matchExists = limitedBaseStrings.some(s => 
+                  s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
+                  s.includes(cleanMatch) ||
+                  cleanMatch.includes(s)
+                );
+                
+                if (!matchExists && process.env.DEBUG_LLM === 'true') {
+                  console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
+                }
+                
+                resolve({ match: cleanMatch });
               }
-              
-              // Remove any trailing explanations or comments (text after period, comma, etc.)
-              // But be careful not to break strings that legitimately contain punctuation
-              const firstSentenceEnd = cleanMatch.search(/\.\s+[A-Z]/); // Period followed by space and capital
-              if (firstSentenceEnd > 0) {
-                cleanMatch = cleanMatch.substring(0, firstSentenceEnd).trim();
+            } catch (parseError) {
+              // Fallback if JSON parsing fails
+              if (process.env.DEBUG_LLM === 'true') {
+                console.log('⚠️  Failed to parse JSON response:', content);
               }
-              
-              // Validate: the match should exist in the base strings
-              const matchExists = limitedBaseStrings.some(s => 
-                s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
-                s.includes(cleanMatch) ||
-                cleanMatch.includes(s)
-              );
-              
-              if (!matchExists && process.env.DEBUG_LLM === 'true') {
-                console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
-              }
-              
-              resolve({ match: cleanMatch });
+              resolve({ error: 'Invalid JSON response' });
             }
           } catch (error) {
             resolve({ error: 'Parse error' });
@@ -43603,6 +43771,20 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
   static async findBestMatch(newString, baseEntries, apiKey, model) {
     if (!apiKey || !apiKey.trim()) {
       return { match: null };
+    }
+    
+    // Initialize cache if not already done
+    if (!this.cache) {
+      await this.initCache();
+    }
+    
+    // Check cache first
+    const cached = this.cache.get(newString, model);
+    if (cached) {
+      if (process.env.DEBUG_LLM === 'true') {
+        console.log(`📦 Cache hit for: "${newString.substring(0, 50)}"`);
+      }
+      return cached.result;
     }
     
     // Validate API key format
@@ -43644,15 +43826,16 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
         
         const result = await this.callOpenRouter(apiKey, model, newString, batch);
         
-        // If we found a match, return it immediately
+        // If we found a match, cache it and return
         if (result.match) {
           if (process.env.DEBUG_LLM === 'true') {
             console.log(`✅ Found match in batch ${i + 1}`);
           }
+          this.cache.set(newString, model, result);
           return result;
         }
         
-        // If there was an error, return it
+        // If there was an error, return it (don't cache errors)
         if (result.error) {
           return result;
         }
@@ -43670,7 +43853,9 @@ Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
       }
       
       // No match found in any batch
-      return { match: null };
+      const result = { match: null };
+      this.cache.set(newString, model, result);
+      return result;
     } catch (error) {
       // Re-throw to stop execution
       throw error;
@@ -43773,10 +43958,10 @@ class Reporter {
 
   static async generateMarkdownReport(results, baseEntries, openrouterKey, openrouterModel) {
     const lines = [];
-    lines.push('# 🌍 i18n String Review Report\n');
+    lines.push('## 🌍 i18n String Review Report\n');
 
     if (results.totalChanges === 0) {
-      lines.push('## ✅ No changes detected\n');
+      lines.push('### ✅ No changes detected\n');
       lines.push('The POT files are identical.');
       return lines.join('\n');
     }
@@ -43785,7 +43970,7 @@ class Reporter {
     const baseEntriesArray = baseEntries ? Array.from(baseEntries.values()) : [];
 
     // Summary table
-    lines.push('## 📊 Summary\n');
+    lines.push('### 📊 Summary\n');
     lines.push('| Category | Count |');
     lines.push('|----------|-------|');
     lines.push(`| ➕ Added | ${results.addedCount} |`);
@@ -43795,27 +43980,19 @@ class Reporter {
 
     // Added strings table
     if (results.added.length > 0) {
-      lines.push('<details>');
-      lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location | Words | Suggested Match |');
-      lines.push('|--------|---------|--------|----------|-------|-----------------|');
-
+      // First, collect all entries with their LLM suggestions
+      const entriesWithData = [];
       let totalWords = 0;
       const limit = Math.min(results.added.length, 100);
+      
       for (let i = 0; i < limit; i++) {
         const entry = results.added[i];
-        const msgid = this._truncate(entry.msgid, 50);
-        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
-        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
-        const references = this._parseReferences(entry.comments.reference);
-        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
-        
-        // Count words in msgid and plural
         const wordCount = this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
         totalWords += wordCount;
         
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
+        let hasSuggestion = false;
         if (openrouterKey && baseEntriesArray.length > 0) {
           try {
             const matchResult = await LLMMatcher.findBestMatch(
@@ -43828,7 +44005,8 @@ class Reporter {
             if (matchResult.error) {
               suggestedMatch = `LLM Error: ${matchResult.error}`;
             } else if (matchResult.match) {
-              suggestedMatch = this._truncate(matchResult.match, 40);
+              suggestedMatch = matchResult.match; // Full string, not truncated
+              hasSuggestion = true;
             } else {
               suggestedMatch = 'No close match';
             }
@@ -43840,7 +44018,34 @@ class Reporter {
           }
         }
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} | ${suggestedMatch} |`);
+        entriesWithData.push({
+          entry,
+          wordCount,
+          suggestedMatch,
+          hasSuggestion
+        });
+      }
+      
+      // Sort: entries with suggestions first, then the rest
+      entriesWithData.sort((a, b) => {
+        if (a.hasSuggestion && !b.hasSuggestion) return -1;
+        if (!a.hasSuggestion && b.hasSuggestion) return 1;
+        return 0;
+      });
+      
+      // Now render the table
+      lines.push('<details>');
+      lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Location | Words | Suggested Match |');
+      lines.push('|--------|----------|-------|-----------------|');
+      
+      for (const data of entriesWithData) {
+        const entry = data.entry;
+        const msgid = this._truncate(entry.msgid, 50);
+        const references = this._parseReferences(entry.comments.reference);
+        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
+        
+        lines.push(`| ${msgid} | ${location} | ${data.wordCount} | ${data.suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -43850,11 +44055,11 @@ class Reporter {
       }
 
       if (results.added.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* | ... |`);
+        lines.push(`| ... | ... | *and ${results.added.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** | |`);
+      lines.push(`| **Total** | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -43863,23 +44068,21 @@ class Reporter {
     if (results.removed.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>➖ Removed Strings (${results.removed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location |');
-      lines.push('|--------|---------|--------|----------|');
+      lines.push('| String | Location |');
+      lines.push('|--------|----------|');
 
       const limit = Math.min(results.removed.length, 100);
       for (let i = 0; i < limit; i++) {
         const entry = results.removed[i];
         const msgid = this._truncate(entry.msgid, 50);
-        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
-        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
         const references = this._parseReferences(entry.comments.reference);
         const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} |`);
+        lines.push(`| ${msgid} | ${location} |`);
       }
 
       if (results.removed.length > 100) {
-        lines.push(`| ... | ... | ... | *and ${results.removed.length - 100} more* |`);
+        lines.push(`| ... | *and ${results.removed.length - 100} more* |`);
       }
 
       lines.push('\n</details>\n');
@@ -43887,17 +44090,13 @@ class Reporter {
 
     // Changed strings table
     if (results.changed.length > 0) {
-      lines.push('<details>');
-      lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Existing | Changed | Words | Suggested Match |');
-      lines.push('|--------|---------|----------|---------|-------|-----------------|');
-
+      // First, collect all entries with their LLM suggestions
+      const entriesWithData = [];
       let totalWords = 0;
       const limit = Math.min(results.changed.length, 100);
+      
       for (let i = 0; i < limit; i++) {
         const { base, target } = results.changed[i];
-        const msgid = this._truncate(base.msgid, 40);
-        const context = base.msgctxt ? this._truncate(base.msgctxt, 20) : '-';
         
         // Count words - use target (new) values
         const wordCount = this._countWords(target.msgid) + this._countWords(target.msgidPlural);
@@ -43932,6 +44131,7 @@ class Reporter {
         
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
+        let hasSuggestion = false;
         if (openrouterKey && baseEntriesArray.length > 0) {
           try {
             const matchResult = await LLMMatcher.findBestMatch(
@@ -43944,7 +44144,8 @@ class Reporter {
             if (matchResult.error) {
               suggestedMatch = `LLM Error: ${matchResult.error}`;
             } else if (matchResult.match) {
-              suggestedMatch = this._truncate(matchResult.match, 40);
+              suggestedMatch = matchResult.match; // Full string, not truncated
+              hasSuggestion = true;
             } else {
               suggestedMatch = 'No close match';
             }
@@ -43956,7 +44157,34 @@ class Reporter {
           }
         }
         
-        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} | ${suggestedMatch} |`);
+        entriesWithData.push({
+          base,
+          target,
+          wordCount,
+          existing,
+          changed,
+          suggestedMatch,
+          hasSuggestion
+        });
+      }
+      
+      // Sort: entries with suggestions first, then the rest
+      entriesWithData.sort((a, b) => {
+        if (a.hasSuggestion && !b.hasSuggestion) return -1;
+        if (!a.hasSuggestion && b.hasSuggestion) return 1;
+        return 0;
+      });
+      
+      // Now render the table
+      lines.push('<details>');
+      lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Existing | Changed | Words | Suggested Match |');
+      lines.push('|--------|----------|---------|-------|-----------------|');
+      
+      for (const data of entriesWithData) {
+        const msgid = this._truncate(data.base.msgid, 40);
+        
+        lines.push(`| ${msgid} | ${data.existing} | ${data.changed} | ${data.wordCount} | ${data.suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -43966,11 +44194,11 @@ class Reporter {
       }
 
       if (results.changed.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
+        lines.push(`| ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** | |`);
+      lines.push(`| **Total** | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -44002,6 +44230,14 @@ class Reporter {
 
 module.exports = { Reporter };
 
+
+
+/***/ }),
+
+/***/ 2167:
+/***/ ((module) => {
+
+module.exports = eval("require")("@actions/cache");
 
 
 /***/ }),
@@ -45986,6 +46222,7 @@ const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 const { POTComparator } = __nccwpck_require__(2773);
 const { Reporter } = __nccwpck_require__(3884);
+const { LLMMatcher } = __nccwpck_require__(2461);
 const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
 
@@ -46102,6 +46339,11 @@ async function run() {
       } catch (error) {
         core.warning(`Failed to comment on PR: ${error.message}`);
       }
+    }
+
+    // Save LLM cache if it was used
+    if (openrouterKey) {
+      await LLMMatcher.saveCache();
     }
 
     // Fail if requested and changes detected
