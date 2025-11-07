@@ -103,9 +103,10 @@ class Reporter {
     if (results.added.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location |');
-      lines.push('|--------|---------|--------|----------|');
+      lines.push('| String | Context | Plural | Location | Words |');
+      lines.push('|--------|---------|--------|----------|-------|');
 
+      let totalWords = 0;
       const limit = Math.min(results.added.length, 100);
       for (let i = 0; i < limit; i++) {
         const entry = results.added[i];
@@ -115,12 +116,25 @@ class Reporter {
         const references = this._parseReferences(entry.comments.reference);
         const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} |`);
+        // Count words in msgid and plural
+        const wordCount = this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
+        totalWords += wordCount;
+        
+        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} |`);
+      }
+
+      // Add remaining words from items beyond limit
+      for (let i = limit; i < results.added.length; i++) {
+        const entry = results.added[i];
+        totalWords += this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
       }
 
       if (results.added.length > 100) {
-        lines.push(`| ... | ... | ... | *and ${results.added.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* |`);
       }
+
+      // Footer with total
+      lines.push(`| **Total** | | | | **${totalWords}** |`);
 
       lines.push('\n</details>\n');
     }
@@ -155,14 +169,19 @@ class Reporter {
     if (results.changed.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Existing | Changed |');
-      lines.push('|--------|---------|----------|---------|');
+      lines.push('| String | Context | Existing | Changed | Words |');
+      lines.push('|--------|---------|----------|---------|-------|');
 
+      let totalWords = 0;
       const limit = Math.min(results.changed.length, 100);
       for (let i = 0; i < limit; i++) {
         const { base, target } = results.changed[i];
         const msgid = this._truncate(base.msgid, 40);
         const context = base.msgctxt ? this._truncate(base.msgctxt, 20) : '-';
+        
+        // Count words - use target (new) values
+        const wordCount = this._countWords(target.msgid) + this._countWords(target.msgidPlural);
+        totalWords += wordCount;
         
         // Determine what changed
         const changes = [];
@@ -191,12 +210,21 @@ class Reporter {
         
         const changed = newChanges.length > 0 ? newChanges[0] : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} |`);
+        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} |`);
+      }
+
+      // Add remaining words from items beyond limit
+      for (let i = limit; i < results.changed.length; i++) {
+        const { target } = results.changed[i];
+        totalWords += this._countWords(target.msgid) + this._countWords(target.msgidPlural);
       }
 
       if (results.changed.length > 100) {
-        lines.push(`| ... | ... | ... | *and ${results.changed.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* |`);
       }
+
+      // Footer with total
+      lines.push(`| **Total** | | | | **${totalWords}** |`);
 
       lines.push('\n</details>\n');
     }
@@ -209,6 +237,12 @@ class Reporter {
     const escaped = this.escapeMarkdown(text);
     if (escaped.length <= maxLength) return escaped;
     return escaped.substring(0, maxLength - 3) + '...';
+  }
+
+  static _countWords(text) {
+    if (!text) return 0;
+    // Remove extra whitespace and split by spaces
+    return text.trim().split(/\s+/).filter(word => word.length > 0).length;
   }
 
   static _parseReferences(referenceString) {

@@ -57,9 +57,11 @@ jobs:
 The action generates a detailed report with:
 
 - **Summary Table** - Overview of all changes
-- **Added Strings Table** ➕ - New translatable strings (collapsible)
+- **Added Strings Table** ➕ - New translatable strings with word counts (collapsible)
 - **Removed Strings Table** ➖ - Deleted translatable strings (collapsible)
-- **Changed Strings Table** 🔄 - Modified strings with before/after comparison (collapsible)
+- **Changed Strings Table** 🔄 - Modified strings with before/after comparison and word counts (collapsible)
+
+Added and Changed tables include a **Words** column showing the word count for each string, plus a **Total** footer row summing all words. This helps estimate translation workload.
 
 All detail tables are collapsed by default and can be expanded by clicking. See `examples/SAMPLE_REPORT.md` for a sample report.
 
