@@ -2,6 +2,8 @@
 
 This directory contains example POT files for testing the i18n String Reviewer action.
 
+**See `SAMPLE_REPORT.md` for an example of the collapsible table report format.**
+
 ## Files
 
 - `base.pot` - Simulates the POT file from the base branch

@@ -67,16 +67,43 @@ async function run() {
         const { owner, repo } = github.context.repo;
         const pullRequestNumber = github.context.payload.pull_request?.number;
 
-        if (pullRequestNumber && results.totalChanges > 0) {
-          await octokit.rest.issues.createComment({
+        if (pullRequestNumber) {
+          // Add a unique identifier to find this comment later
+          const commentIdentifier = '<!-- i18n-string-reviewer-report -->';
+          const commentBody = results.totalChanges > 0 
+            ? `${commentIdentifier}\n${markdownReport}`
+            : `${commentIdentifier}\n# 🌍 i18n String Review Report\n\n## ✅ No changes detected\n\nThe POT files are identical.`;
+
+          // Find existing comment from this action
+          const { data: comments } = await octokit.rest.issues.listComments({
             owner,
             repo,
             issue_number: pullRequestNumber,
-            body: markdownReport
           });
-          console.log('\n✓ Posted comment to PR');
-        } else if (results.totalChanges === 0) {
-          console.log('\n✓ No changes detected, skipping PR comment');
+
+          const existingComment = comments.find(comment => 
+            comment.body?.includes(commentIdentifier)
+          );
+
+          if (existingComment) {
+            // Update existing comment
+            await octokit.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existingComment.id,
+              body: commentBody
+            });
+            console.log('\n✓ Updated existing PR comment');
+          } else {
+            // Create new comment
+            await octokit.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequestNumber,
+              body: commentBody
+            });
+            console.log('\n✓ Posted new comment to PR');
+          }
         }
       } catch (error) {
         core.warning(`Failed to comment on PR: ${error.message}`);

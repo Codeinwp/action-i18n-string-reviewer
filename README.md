@@ -52,11 +52,16 @@ jobs:
 | `total-changes` | Total number of changes |
 | `report` | Detailed Markdown report |
 
-## What Gets Detected
+## Report Format
 
-- **Added Strings** ➕ - New translatable strings
-- **Removed Strings** ➖ - Deleted translatable strings
-- **Changed Strings** 🔄 - Modified plural forms or comments
+The action generates a detailed report with:
+
+- **Summary Table** - Overview of all changes
+- **Added Strings Table** ➕ - New translatable strings (collapsible)
+- **Removed Strings Table** ➖ - Deleted translatable strings (collapsible)
+- **Changed Strings Table** 🔄 - Modified strings with before/after comparison (collapsible)
+
+All detail tables are collapsed by default and can be expanded by clicking. See `examples/SAMPLE_REPORT.md` for a sample report.
 
 ## Example with Outputs
 

@@ -99,111 +99,116 @@ class Reporter {
     lines.push(`| 🔄 Changed | ${results.changedCount} |`);
     lines.push(`| **Total** | **${results.totalChanges}** |\n`);
 
-    // Added strings
+    // Added strings table
     if (results.added.length > 0) {
-      lines.push('## ➕ Added Strings\n');
-      lines.push(`**${results.added.length} new string(s) added**\n`);
+      lines.push('<details>');
+      lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Context | Plural | Location |');
+      lines.push('|--------|---------|--------|----------|');
 
-      const limit = Math.min(results.added.length, 50);
+      const limit = Math.min(results.added.length, 100);
       for (let i = 0; i < limit; i++) {
         const entry = results.added[i];
-        lines.push(`### ${i + 1}. ${this.escapeMarkdown(entry.msgid)}\n`);
-
-        if (entry.msgctxt) {
-          lines.push(`**Context:** \`${this.escapeMarkdown(entry.msgctxt)}\`\n`);
-        }
-
-        if (entry.msgidPlural) {
-          lines.push(`**Plural:** ${this.escapeMarkdown(entry.msgidPlural)}\n`);
-        }
-
+        const msgid = this._truncate(entry.msgid, 50);
+        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
+        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
         const references = this._parseReferences(entry.comments.reference);
-        if (references.length > 0) {
-          const refsStr = references.slice(0, 3).map(ref => `\`${ref}\``).join(', ');
-          lines.push(`**Found in:** ${refsStr}\n`);
-        }
-
-        lines.push('');
+        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
+        
+        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} |`);
       }
 
-      if (results.added.length > 50) {
-        lines.push(`*... and ${results.added.length - 50} more*\n`);
+      if (results.added.length > 100) {
+        lines.push(`| ... | ... | ... | *and ${results.added.length - 100} more* |`);
       }
+
+      lines.push('\n</details>\n');
     }
 
-    // Removed strings
+    // Removed strings table
     if (results.removed.length > 0) {
-      lines.push('## ➖ Removed Strings\n');
-      lines.push(`**${results.removed.length} string(s) removed**\n`);
+      lines.push('<details>');
+      lines.push(`<summary><strong>➖ Removed Strings (${results.removed.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Context | Plural | Location |');
+      lines.push('|--------|---------|--------|----------|');
 
-      const limit = Math.min(results.removed.length, 50);
+      const limit = Math.min(results.removed.length, 100);
       for (let i = 0; i < limit; i++) {
         const entry = results.removed[i];
-        lines.push(`### ${i + 1}. ${this.escapeMarkdown(entry.msgid)}\n`);
-
-        if (entry.msgctxt) {
-          lines.push(`**Context:** \`${this.escapeMarkdown(entry.msgctxt)}\`\n`);
-        }
-
-        if (entry.msgidPlural) {
-          lines.push(`**Plural:** ${this.escapeMarkdown(entry.msgidPlural)}\n`);
-        }
-
+        const msgid = this._truncate(entry.msgid, 50);
+        const context = entry.msgctxt ? this._truncate(entry.msgctxt, 20) : '-';
+        const plural = entry.msgidPlural ? this._truncate(entry.msgidPlural, 30) : '-';
         const references = this._parseReferences(entry.comments.reference);
-        if (references.length > 0) {
-          const refsStr = references.slice(0, 3).map(ref => `\`${ref}\``).join(', ');
-          lines.push(`**Was in:** ${refsStr}\n`);
-        }
-
-        lines.push('');
+        const location = references.length > 0 ? this._truncate(references[0], 30) : '-';
+        
+        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} |`);
       }
 
-      if (results.removed.length > 50) {
-        lines.push(`*... and ${results.removed.length - 50} more*\n`);
+      if (results.removed.length > 100) {
+        lines.push(`| ... | ... | ... | *and ${results.removed.length - 100} more* |`);
       }
+
+      lines.push('\n</details>\n');
     }
 
-    // Changed strings
+    // Changed strings table
     if (results.changed.length > 0) {
-      lines.push('## 🔄 Changed Strings\n');
-      lines.push(`**${results.changed.length} string(s) modified**\n`);
+      lines.push('<details>');
+      lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
+      lines.push('| String | Context | Existing | Changed |');
+      lines.push('|--------|---------|----------|---------|');
 
-      const limit = Math.min(results.changed.length, 50);
+      const limit = Math.min(results.changed.length, 100);
       for (let i = 0; i < limit; i++) {
         const { base, target } = results.changed[i];
-        lines.push(`### ${i + 1}. ${this.escapeMarkdown(base.msgid)}\n`);
-
-        if (base.msgctxt) {
-          lines.push(`**Context:** \`${this.escapeMarkdown(base.msgctxt)}\`\n`);
-        }
-
+        const msgid = this._truncate(base.msgid, 40);
+        const context = base.msgctxt ? this._truncate(base.msgctxt, 20) : '-';
+        
+        // Determine what changed
+        const changes = [];
         if (base.msgidPlural !== target.msgidPlural) {
-          lines.push('**Plural form changed:**');
-          lines.push(`- ❌ Old: ${this.escapeMarkdown(base.msgidPlural)}`);
-          lines.push(`- ✅ New: ${this.escapeMarkdown(target.msgidPlural)}\n`);
+          changes.push(`Plural: ${this._truncate(base.msgidPlural || '(none)', 30)}`);
         }
-
         if (base.comments.translator !== target.comments.translator) {
-          lines.push('**Translator comment changed:**');
-          lines.push(`- ❌ Old: ${this.escapeMarkdown(base.comments.translator)}`);
-          lines.push(`- ✅ New: ${this.escapeMarkdown(target.comments.translator)}\n`);
+          changes.push(`Comment: ${this._truncate(base.comments.translator || '(none)', 30)}`);
         }
-
         if (base.comments.extracted !== target.comments.extracted) {
-          lines.push('**Extracted comment changed:**');
-          lines.push(`- ❌ Old: ${this.escapeMarkdown(base.comments.extracted)}`);
-          lines.push(`- ✅ New: ${this.escapeMarkdown(target.comments.extracted)}\n`);
+          changes.push(`Extracted: ${this._truncate(base.comments.extracted || '(none)', 30)}`);
         }
-
-        lines.push('');
+        
+        const existing = changes.length > 0 ? changes[0] : '-';
+        
+        const newChanges = [];
+        if (base.msgidPlural !== target.msgidPlural) {
+          newChanges.push(`Plural: ${this._truncate(target.msgidPlural || '(none)', 30)}`);
+        }
+        if (base.comments.translator !== target.comments.translator) {
+          newChanges.push(`Comment: ${this._truncate(target.comments.translator || '(none)', 30)}`);
+        }
+        if (base.comments.extracted !== target.comments.extracted) {
+          newChanges.push(`Extracted: ${this._truncate(target.comments.extracted || '(none)', 30)}`);
+        }
+        
+        const changed = newChanges.length > 0 ? newChanges[0] : '-';
+        
+        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} |`);
       }
 
-      if (results.changed.length > 50) {
-        lines.push(`*... and ${results.changed.length - 50} more*\n`);
+      if (results.changed.length > 100) {
+        lines.push(`| ... | ... | ... | *and ${results.changed.length - 100} more* |`);
       }
+
+      lines.push('\n</details>\n');
     }
 
     return lines.join('\n');
+  }
+
+  static _truncate(text, maxLength) {
+    if (!text) return '';
+    const escaped = this.escapeMarkdown(text);
+    if (escaped.length <= maxLength) return escaped;
+    return escaped.substring(0, maxLength - 3) + '...';
   }
 
   static _parseReferences(referenceString) {
