@@ -68,13 +68,16 @@ Enable AI-powered suggestions to find existing strings that could be reused inst
     openrouter-model: 'anthropic/claude-3.5-sonnet'
 ```
 
-When enabled, the action analyzes each added and changed string against all existing base strings to suggest semantically similar alternatives. This helps:
+When enabled, the action analyzes each added and changed string against all existing base strings (including removed strings) to suggest semantically similar alternatives. This helps:
 - Avoid duplicate strings with slightly different wording
 - Reduce translation costs by reusing existing translations
 - Maintain consistency across the application
+- **Reuse translations from removed strings** - Even deleted strings are valuable since they're already translated
+
+**Smart Matching**: The action includes removed/deleted strings in its suggestions because those translations already exist. If you're adding "Settings" and previously had "Edit Settings" that was removed, the action will suggest reusing that translation.
 
 The **Suggested Match** column will show:
-- The best matching existing string if found
+- The best matching existing string if found (may be from current or removed strings)
 - "No close match" if no similar string exists
 - "LLM Error: {reason}" if the API call fails
 
@@ -82,20 +85,33 @@ Get your OpenRouter API key at [openrouter.ai](https://openrouter.ai/).
 
 ### LLM Result Caching
 
-The action automatically caches LLM results using GitHub Actions cache to avoid redundant API calls. This cache:
+The action automatically caches LLM results in a hidden PR comment to avoid redundant API calls. This cache:
 
-- **Persists between workflow runs** - Stored in GitHub's cache infrastructure
-- **Saves API costs** - Same strings won't be analyzed twice
-- **Speeds up workflow** - Instant results for cached strings  
-- **No repository changes** - Cache doesn't pollute git history
-- **Automatic expiration** - GitHub automatically manages cache lifecycle (7 days)
+- **Persists across workflow runs** - Stored in the PR itself
+- **Saves API costs** - Same strings won't be analyzed twice  
+- **Speeds up workflow** - Instant results for cached strings
+- **PR-specific** - Each PR maintains its own cache
+- **No extra permissions** - Uses the same PR write access for commenting
+- **Automatic cleanup** - Cache is removed when PR is closed/merged
 
 The cache works automatically - no configuration needed! On each run:
-1. Action restores previous LLM results from GitHub cache
+1. Action checks for existing cache in PR comments
 2. New API calls are made only for uncached strings
-3. Updated cache is saved back to GitHub
+3. Updated cache is saved as a hidden HTML comment in the PR
 
-Cache is stored with key `llm-cache-default-v1`. You can clear it by manually deleting caches in your repository settings.
+**How it works**: The cache is stored as base64-encoded JSON inside HTML comments that are invisible in the PR's rendered view but updated on each run. This approach is simpler and more reliable than GitHub Actions cache.
+
+**Permissions**: If your repository uses restricted permissions, ensure the workflow has `pull-requests: write` permission:
+
+```yaml
+jobs:
+  your-job:
+    permissions:
+      contents: read
+      pull-requests: write  # Required for commenting and caching
+```
+
+The cache comment is automatically managed by the action and doesn't clutter your PR discussion.
 
 ## Report Format
 

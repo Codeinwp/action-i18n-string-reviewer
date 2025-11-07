@@ -93,7 +93,15 @@ class Reporter {
     }
 
     // Convert baseEntries Map to Array for LLM matcher
+    // Include both existing base entries AND removed strings (which are already translated)
     const baseEntriesArray = baseEntries ? Array.from(baseEntries.values()) : [];
+    
+    // Add removed strings to the pool of available strings for matching
+    // These are valuable because they're already translated even though they're no longer in the code
+    if (results.removed && results.removed.length > 0) {
+      console.log(`ℹ️  Including ${results.removed.length} removed strings as potential matches (already translated)`);
+      baseEntriesArray.push(...results.removed);
+    }
 
     // Summary table
     lines.push('### 📊 Summary\n');

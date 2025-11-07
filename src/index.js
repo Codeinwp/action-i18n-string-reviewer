@@ -45,6 +45,25 @@ async function run() {
     // Get results
     const results = comparator.getResults();
 
+    // Initialize GitHub context for PR operations (commenting and caching)
+    let octokit = null;
+    let prContext = null;
+    
+    if (githubToken && github.context.eventName === 'pull_request') {
+      octokit = github.getOctokit(githubToken);
+      const { owner, repo } = github.context.repo;
+      const pullRequestNumber = github.context.payload.pull_request?.number;
+      
+      if (pullRequestNumber) {
+        prContext = { owner, repo, pullRequestNumber };
+        
+        // Initialize LLM cache with PR context if LLM is enabled
+        if (openrouterKey) {
+          await LLMMatcher.initCache('.llm-cache.json', octokit, prContext);
+        }
+      }
+    }
+
     // Generate reports
     const jsonReport = Reporter.generateJSONReport(results);
     const markdownReport = await Reporter.generateMarkdownReport(
@@ -72,12 +91,10 @@ async function run() {
     }
 
     // Comment on PR if requested
-    if (commentOnPR && githubToken && github.context.eventName === 'pull_request') {
+    if (commentOnPR && octokit && prContext) {
       try {
-        const octokit = github.getOctokit(githubToken);
-        const { owner, repo } = github.context.repo;
-        const pullRequestNumber = github.context.payload.pull_request?.number;
-
+        const { owner, repo, pullRequestNumber } = prContext;
+        
         if (pullRequestNumber) {
           // Add a unique identifier to find this comment later
           const commentIdentifier = '<!-- i18n-string-reviewer-report -->';

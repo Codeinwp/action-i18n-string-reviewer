@@ -7,9 +7,9 @@ class LLMMatcher {
   /**
    * Initialize cache
    */
-  static async initCache(cacheFilePath = '.llm-cache.json') {
+  static async initCache(cacheFilePath = '.llm-cache.json', octokit = null, prContext = null) {
     if (!this.cache) {
-      this.cache = new LLMCache(cacheFilePath);
+      this.cache = new LLMCache(cacheFilePath, octokit, prContext);
       await this.cache.load();
     }
     return this.cache;
