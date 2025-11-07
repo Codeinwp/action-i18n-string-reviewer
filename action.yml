@@ -1,0 +1,41 @@
+name: 'i18n String Reviewer'
+description: 'Compare POT files between branches and report added, removed, and changed strings'
+branding:
+  icon: 'git-pull-request'
+  color: 'blue'
+
+inputs:
+  base-pot-file:
+    description: 'Path to the base branch POT file'
+    required: true
+  target-pot-file:
+    description: 'Path to the target branch POT file'
+    required: true
+  fail-on-changes:
+    description: 'Fail the action if changes are detected'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token for commenting on PRs'
+    required: false
+    default: ${{ github.token }}
+  comment-on-pr:
+    description: 'Whether to comment on pull requests with the report'
+    required: false
+    default: 'true'
+
+outputs:
+  added-count:
+    description: 'Number of added strings'
+  removed-count:
+    description: 'Number of removed strings'
+  changed-count:
+    description: 'Number of changed strings'
+  total-changes:
+    description: 'Total number of changes'
+  report:
+    description: 'Detailed report of all changes'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

@@ -1,0 +1,17 @@
+# Ensure dist files are not ignored by linguist
+dist/** linguist-generated=true
+
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# JavaScript files
+*.js text eol=lf
+*.json text eol=lf
+
+# POT files
+*.pot text eol=lf
+*.po text eol=lf
+
+# Markdown
+*.md text eol=lf
+

@@ -1,0 +1,29 @@
+{
+  "name": "action-i18n-string-reviewer",
+  "version": "1.0.0",
+  "description": "GitHub Action to compare POT files and report translation string changes",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.js -o dist --source-map --license licenses.txt",
+    "test": "node test/test.js"
+  },
+  "keywords": [
+    "github-action",
+    "i18n",
+    "internationalization",
+    "gettext",
+    "pot",
+    "translations"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0",
+    "gettext-parser": "^7.0.1"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1"
+  }
+}
+

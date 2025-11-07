@@ -1,0 +1,80 @@
+name: i18n String Review Example
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - '**.pot'
+      - 'languages/**'
+
+jobs:
+  review-translations:
+    runs-on: ubuntu-latest
+    name: Review Translation String Changes
+    
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Extract base branch POT file
+        id: get-base
+        run: |
+          # Try to get the POT file from the base branch
+          BASE_POT_PATH="languages/myapp.pot"  # Adjust this to your POT file path
+          
+          if git show origin/${{ github.base_ref }}:$BASE_POT_PATH > /tmp/base.pot 2>/dev/null; then
+            echo "Base POT file extracted successfully"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Base POT file doesn't exist, creating empty file"
+            echo "" > /tmp/base.pot
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Compare POT files
+        id: compare
+        uses: ./  # Use your action (or replace with your-username/action-i18n-string-reviewer@v1)
+        with:
+          base-pot-file: '/tmp/base.pot'
+          target-pot-file: 'languages/myapp.pot'  # Adjust this to your POT file path
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-changes: 'false'  # Set to 'true' if you want to fail on any changes
+      
+      - name: Display Summary
+        run: |
+          echo "### 🌍 Translation String Changes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Type | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ➕ Added | ${{ steps.compare.outputs.added-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ➖ Removed | ${{ steps.compare.outputs.removed-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔄 Changed | ${{ steps.compare.outputs.changed-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total** | **${{ steps.compare.outputs.total-changes }}** |" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create workflow artifact
+        if: steps.compare.outputs.total-changes > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: pot-comparison-report
+          path: |
+            ${{ runner.temp }}/pot-comparison.json
+            ${{ runner.temp }}/pot-comparison.md
+          retention-days: 30
+
+  # Optional: Notify translators via Slack/Discord/Email
+  notify-translators:
+    runs-on: ubuntu-latest
+    needs: review-translations
+    if: needs.review-translations.outputs.total-changes > 0
+    
+    steps:
+      - name: Notify team
+        run: |
+          echo "Translation changes detected!"
+          echo "You could add Slack/Discord/Email notifications here"
+          # Example: Use slackapi/slack-github-action or other notification actions
+
