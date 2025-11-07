@@ -134,7 +134,7 @@ class Reporter {
               suggestedMatch = matchResult.match; // Full string, not truncated
               hasSuggestion = true;
             } else {
-              suggestedMatch = 'No close match';
+              suggestedMatch = '*No close match*'; // Italics to distinguish from actual suggestions
             }
             
             // Small delay between string checks to avoid rate limiting
@@ -273,7 +273,7 @@ class Reporter {
               suggestedMatch = matchResult.match; // Full string, not truncated
               hasSuggestion = true;
             } else {
-              suggestedMatch = 'No close match';
+              suggestedMatch = '*No close match*'; // Italics to distinguish from actual suggestions
             }
             
             // Small delay between string checks to avoid rate limiting
