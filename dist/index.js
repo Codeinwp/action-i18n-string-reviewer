@@ -43425,8 +43425,157 @@ module.exports = { POTComparator, POTEntry };
 
 /***/ }),
 
+/***/ 2461:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const https = __nccwpck_require__(5692);
+
+class LLMMatcher {
+  /**
+   * Call OpenRouter API to find best matching string
+   * @param {string} apiKey - OpenRouter API key
+   * @param {string} model - Model identifier
+   * @param {string} newString - The new string to find a match for
+   * @param {Array<string>} baseStrings - Array of existing strings from base POT
+   * @returns {Promise<Object>} - Response with match or error
+   */
+  static async callOpenRouter(apiKey, model, newString, baseStrings) {
+    return new Promise((resolve, reject) => {
+      // Limit base strings to prevent token limit issues
+      const limitedBaseStrings = baseStrings.slice(0, 100);
+      
+      const prompt = `You are helping to avoid duplicate translation strings. Given a new string and a list of existing strings, find the single best semantic match from the existing strings that could be used instead.
+
+New string: "${newString}"
+
+Existing strings:
+${limitedBaseStrings.map((s, i) => `${i + 1}. "${s}"`).join('\n')}
+
+Instructions:
+- If you find a semantically similar existing string that could reasonably replace the new string, respond with ONLY that exact string (nothing else).
+- If no existing string is similar enough to be a good replacement, respond with exactly: NO_MATCH
+- Consider: similar meaning, same context, same tone, similar purpose
+- Be strict - only suggest matches that are truly interchangeable
+
+Your response:`;
+
+      const data = JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 200
+      });
+
+      const options = {
+        hostname: 'openrouter.ai',
+        port: 443,
+        path: '/api/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://github.com/Codeinwp/action-i18n-string-reviewer',
+          'X-Title': 'i18n String Reviewer',
+          'Content-Length': data.length
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              resolve({ error: `API Error ${res.statusCode}` });
+              return;
+            }
+
+            const response = JSON.parse(body);
+            const content = response.choices?.[0]?.message?.content?.trim();
+            
+            if (!content) {
+              resolve({ error: 'Empty response' });
+              return;
+            }
+
+            if (content === 'NO_MATCH') {
+              resolve({ match: null });
+            } else {
+              // Clean up the response - remove quotes if present
+              const cleanMatch = content.replace(/^["']|["']$/g, '');
+              resolve({ match: cleanMatch });
+            }
+          } catch (error) {
+            resolve({ error: 'Parse error' });
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        resolve({ error: 'Network error' });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        resolve({ error: 'Timeout' });
+      });
+
+      req.setTimeout(30000); // 30 second timeout
+      req.write(data);
+      req.end();
+    });
+  }
+
+  /**
+   * Find best matching string from base POT for a new string
+   * @param {string} newString - The new string to find a match for
+   * @param {Array<Object>} baseEntries - Array of POTEntry objects from base POT
+   * @param {string} apiKey - OpenRouter API key
+   * @param {string} model - Model identifier
+   * @returns {Promise<Object>} - { match: 'string' } or { match: null } or { error: 'message' }
+   */
+  static async findBestMatch(newString, baseEntries, apiKey, model) {
+    if (!apiKey || !newString || !baseEntries || baseEntries.length === 0) {
+      return { match: null };
+    }
+
+    try {
+      // Extract just the msgid strings from base entries
+      const baseStrings = baseEntries
+        .map(entry => entry.msgid)
+        .filter(msgid => msgid && msgid.trim().length > 0);
+
+      if (baseStrings.length === 0) {
+        return { match: null };
+      }
+
+      const result = await this.callOpenRouter(apiKey, model, newString, baseStrings);
+      return result;
+    } catch (error) {
+      return { error: error.message || 'Unknown error' };
+    }
+  }
+}
+
+module.exports = { LLMMatcher };
+
+
+
+/***/ }),
+
 /***/ 3884:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { LLMMatcher } = __nccwpck_require__(2461);
 
 class Reporter {
   static escapeMarkdown(text) {
@@ -43510,7 +43659,7 @@ class Reporter {
     return report;
   }
 
-  static generateMarkdownReport(results) {
+  static async generateMarkdownReport(results, baseEntries, openrouterKey, openrouterModel) {
     const lines = [];
     lines.push('# 🌍 i18n String Review Report\n');
 
@@ -43519,6 +43668,9 @@ class Reporter {
       lines.push('The POT files are identical.');
       return lines.join('\n');
     }
+
+    // Convert baseEntries Map to Array for LLM matcher
+    const baseEntriesArray = baseEntries ? Array.from(baseEntries.values()) : [];
 
     // Summary table
     lines.push('## 📊 Summary\n');
@@ -43533,8 +43685,8 @@ class Reporter {
     if (results.added.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location | Words |');
-      lines.push('|--------|---------|--------|----------|-------|');
+      lines.push('| String | Context | Plural | Location | Words | Suggested Match |');
+      lines.push('|--------|---------|--------|----------|-------|-----------------|');
 
       let totalWords = 0;
       const limit = Math.min(results.added.length, 100);
@@ -43550,7 +43702,26 @@ class Reporter {
         const wordCount = this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
         totalWords += wordCount;
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} |`);
+        // Get LLM suggestion if enabled
+        let suggestedMatch = '-';
+        if (openrouterKey && baseEntriesArray.length > 0) {
+          const matchResult = await LLMMatcher.findBestMatch(
+            entry.msgid,
+            baseEntriesArray,
+            openrouterKey,
+            openrouterModel
+          );
+          
+          if (matchResult.error) {
+            suggestedMatch = `LLM Error: ${matchResult.error}`;
+          } else if (matchResult.match) {
+            suggestedMatch = this._truncate(matchResult.match, 40);
+          } else {
+            suggestedMatch = 'No close match';
+          }
+        }
+        
+        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} | ${suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -43560,11 +43731,11 @@ class Reporter {
       }
 
       if (results.added.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** |`);
+      lines.push(`| **Total** | | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -43599,8 +43770,8 @@ class Reporter {
     if (results.changed.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Existing | Changed | Words |');
-      lines.push('|--------|---------|----------|---------|-------|');
+      lines.push('| String | Context | Existing | Changed | Words | Suggested Match |');
+      lines.push('|--------|---------|----------|---------|-------|-----------------|');
 
       let totalWords = 0;
       const limit = Math.min(results.changed.length, 100);
@@ -43640,7 +43811,26 @@ class Reporter {
         
         const changed = newChanges.length > 0 ? newChanges[0] : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} |`);
+        // Get LLM suggestion if enabled
+        let suggestedMatch = '-';
+        if (openrouterKey && baseEntriesArray.length > 0) {
+          const matchResult = await LLMMatcher.findBestMatch(
+            target.msgid,
+            baseEntriesArray,
+            openrouterKey,
+            openrouterModel
+          );
+          
+          if (matchResult.error) {
+            suggestedMatch = `LLM Error: ${matchResult.error}`;
+          } else if (matchResult.match) {
+            suggestedMatch = this._truncate(matchResult.match, 40);
+          } else {
+            suggestedMatch = 'No close match';
+          }
+        }
+        
+        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} | ${suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -43650,11 +43840,11 @@ class Reporter {
       }
 
       if (results.changed.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** |`);
+      lines.push(`| **Total** | | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -45681,11 +45871,16 @@ async function run() {
     const failOnChanges = core.getInput('fail-on-changes') === 'true';
     const githubToken = core.getInput('github-token');
     const commentOnPR = core.getInput('comment-on-pr') === 'true';
+    const openrouterKey = core.getInput('openrouter-key');
+    const openrouterModel = core.getInput('openrouter-model') || 'anthropic/claude-3.5-sonnet';
 
     console.log('🌍 i18n String Reviewer');
     console.log('========================');
     console.log(`Base POT file: ${basePotFile}`);
     console.log(`Target POT file: ${targetPotFile}`);
+    if (openrouterKey) {
+      console.log(`LLM Matching: Enabled (${openrouterModel})`);
+    }
     console.log('');
 
     // Validate files exist
@@ -45709,7 +45904,12 @@ async function run() {
 
     // Generate reports
     const jsonReport = Reporter.generateJSONReport(results);
-    const markdownReport = Reporter.generateMarkdownReport(results);
+    const markdownReport = await Reporter.generateMarkdownReport(
+      results,
+      comparator.baseEntries,
+      openrouterKey,
+      openrouterModel
+    );
 
     // Set outputs
     core.setOutput('added-count', results.addedCount);

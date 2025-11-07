@@ -13,11 +13,16 @@ async function run() {
     const failOnChanges = core.getInput('fail-on-changes') === 'true';
     const githubToken = core.getInput('github-token');
     const commentOnPR = core.getInput('comment-on-pr') === 'true';
+    const openrouterKey = core.getInput('openrouter-key');
+    const openrouterModel = core.getInput('openrouter-model') || 'anthropic/claude-3.5-sonnet';
 
     console.log('🌍 i18n String Reviewer');
     console.log('========================');
     console.log(`Base POT file: ${basePotFile}`);
     console.log(`Target POT file: ${targetPotFile}`);
+    if (openrouterKey) {
+      console.log(`LLM Matching: Enabled (${openrouterModel})`);
+    }
     console.log('');
 
     // Validate files exist
@@ -41,7 +46,12 @@ async function run() {
 
     // Generate reports
     const jsonReport = Reporter.generateJSONReport(results);
-    const markdownReport = Reporter.generateMarkdownReport(results);
+    const markdownReport = await Reporter.generateMarkdownReport(
+      results,
+      comparator.baseEntries,
+      openrouterKey,
+      openrouterModel
+    );
 
     // Set outputs
     core.setOutput('added-count', results.addedCount);

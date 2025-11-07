@@ -23,6 +23,14 @@ inputs:
     description: 'Whether to comment on pull requests with the report'
     required: false
     default: 'true'
+  openrouter-key:
+    description: 'OpenRouter API key for LLM string matching suggestions'
+    required: false
+    default: ''
+  openrouter-model:
+    description: 'OpenRouter model to use for matching'
+    required: false
+    default: 'anthropic/claude-3.5-sonnet'
 
 outputs:
   added-count:

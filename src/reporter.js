@@ -1,3 +1,5 @@
+const { LLMMatcher } = require('./llm-matcher');
+
 class Reporter {
   static escapeMarkdown(text) {
     if (!text) return '';
@@ -80,7 +82,7 @@ class Reporter {
     return report;
   }
 
-  static generateMarkdownReport(results) {
+  static async generateMarkdownReport(results, baseEntries, openrouterKey, openrouterModel) {
     const lines = [];
     lines.push('# 🌍 i18n String Review Report\n');
 
@@ -89,6 +91,9 @@ class Reporter {
       lines.push('The POT files are identical.');
       return lines.join('\n');
     }
+
+    // Convert baseEntries Map to Array for LLM matcher
+    const baseEntriesArray = baseEntries ? Array.from(baseEntries.values()) : [];
 
     // Summary table
     lines.push('## 📊 Summary\n');
@@ -103,8 +108,8 @@ class Reporter {
     if (results.added.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>➕ Added Strings (${results.added.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Plural | Location | Words |');
-      lines.push('|--------|---------|--------|----------|-------|');
+      lines.push('| String | Context | Plural | Location | Words | Suggested Match |');
+      lines.push('|--------|---------|--------|----------|-------|-----------------|');
 
       let totalWords = 0;
       const limit = Math.min(results.added.length, 100);
@@ -120,7 +125,26 @@ class Reporter {
         const wordCount = this._countWords(entry.msgid) + this._countWords(entry.msgidPlural);
         totalWords += wordCount;
         
-        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} |`);
+        // Get LLM suggestion if enabled
+        let suggestedMatch = '-';
+        if (openrouterKey && baseEntriesArray.length > 0) {
+          const matchResult = await LLMMatcher.findBestMatch(
+            entry.msgid,
+            baseEntriesArray,
+            openrouterKey,
+            openrouterModel
+          );
+          
+          if (matchResult.error) {
+            suggestedMatch = `LLM Error: ${matchResult.error}`;
+          } else if (matchResult.match) {
+            suggestedMatch = this._truncate(matchResult.match, 40);
+          } else {
+            suggestedMatch = 'No close match';
+          }
+        }
+        
+        lines.push(`| ${msgid} | ${context} | ${plural} | ${location} | ${wordCount} | ${suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -130,11 +154,11 @@ class Reporter {
       }
 
       if (results.added.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.added.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** |`);
+      lines.push(`| **Total** | | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
@@ -169,8 +193,8 @@ class Reporter {
     if (results.changed.length > 0) {
       lines.push('<details>');
       lines.push(`<summary><strong>🔄 Changed Strings (${results.changed.length})</strong> - Click to expand</summary>\n`);
-      lines.push('| String | Context | Existing | Changed | Words |');
-      lines.push('|--------|---------|----------|---------|-------|');
+      lines.push('| String | Context | Existing | Changed | Words | Suggested Match |');
+      lines.push('|--------|---------|----------|---------|-------|-----------------|');
 
       let totalWords = 0;
       const limit = Math.min(results.changed.length, 100);
@@ -210,7 +234,26 @@ class Reporter {
         
         const changed = newChanges.length > 0 ? newChanges[0] : '-';
         
-        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} |`);
+        // Get LLM suggestion if enabled
+        let suggestedMatch = '-';
+        if (openrouterKey && baseEntriesArray.length > 0) {
+          const matchResult = await LLMMatcher.findBestMatch(
+            target.msgid,
+            baseEntriesArray,
+            openrouterKey,
+            openrouterModel
+          );
+          
+          if (matchResult.error) {
+            suggestedMatch = `LLM Error: ${matchResult.error}`;
+          } else if (matchResult.match) {
+            suggestedMatch = this._truncate(matchResult.match, 40);
+          } else {
+            suggestedMatch = 'No close match';
+          }
+        }
+        
+        lines.push(`| ${msgid} | ${context} | ${existing} | ${changed} | ${wordCount} | ${suggestedMatch} |`);
       }
 
       // Add remaining words from items beyond limit
@@ -220,11 +263,11 @@ class Reporter {
       }
 
       if (results.changed.length > 100) {
-        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* |`);
+        lines.push(`| ... | ... | ... | ... | *and ${results.changed.length - 100} more* | ... |`);
       }
 
       // Footer with total
-      lines.push(`| **Total** | | | | **${totalWords}** |`);
+      lines.push(`| **Total** | | | | **${totalWords}** | |`);
 
       lines.push('\n</details>\n');
     }
