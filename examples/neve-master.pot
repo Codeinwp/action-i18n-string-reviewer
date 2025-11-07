@@ -278,7 +278,7 @@ msgid "Open Behaviour"
 msgstr ""
 
 #: neve/header-footer-grid/Core/Builder/Abstract_Builder.php:1914
-msgid "Slide from Left"
+msgid "Login Customization"
 msgstr ""
 
 #: neve/header-footer-grid/Core/Builder/Abstract_Builder.php:1915

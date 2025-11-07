@@ -43441,23 +43441,36 @@ class LLMMatcher {
    */
   static async callOpenRouter(apiKey, model, newString, baseStrings) {
     return new Promise((resolve, reject) => {
-      // Limit base strings to prevent token limit issues
-      const limitedBaseStrings = baseStrings.slice(0, 100);
+      // baseStrings is already batched, use all provided strings
+      const limitedBaseStrings = baseStrings;
       
-      const prompt = `You are helping to avoid duplicate translation strings. Given a new string and a list of existing strings, find the single best semantic match from the existing strings that could be used instead.
+      // Create a compact list to save tokens
+      const existingList = limitedBaseStrings.map((s, i) => `${i + 1}. ${s}`).join('\n');
+      
+      const prompt = `Find matching translation string with same meaning.
+NEW: "${newString}"
 
-New string: "${newString}"
+EXISTING:
+${existingList}
 
-Existing strings:
-${limitedBaseStrings.map((s, i) => `${i + 1}. "${s}"`).join('\n')}
+Match ONLY if nearly identical meaning. Examples of valid matches:
+- "Button Settings" matches "Button Setting"
+- "Show Header" matches "Display Header"
+- "Primary Color" matches "Primary Colour"
 
-Instructions:
-- If you find a semantically similar existing string that could reasonably replace the new string, respond with ONLY that exact string (nothing else).
-- If no existing string is similar enough to be a good replacement, respond with exactly: NO_MATCH
-- Consider: similar meaning, same context, same tone, similar purpose
-- Be strict - only suggest matches that are truly interchangeable
+Different topic or unrelated = NO_MATCH.
 
-Your response:`;
+Reply: Number and text (e.g., "42. Button Setting") OR NO_MATCH`;
+
+      // Debug logging
+      if (process.env.DEBUG_LLM === 'true') {
+        console.log('\n🔍 LLM DEBUG - Request for:', newString.substring(0, 50));
+        console.log('Model:', model);
+        console.log('Base strings in batch:', limitedBaseStrings.length);
+        console.log('Prompt length (chars):', prompt.length);
+        console.log('Estimated tokens:', Math.ceil(prompt.length / 4));
+        console.log('Prompt:\n---\n' + prompt + '\n---\n');
+      }
 
       const data = JSON.stringify({
         model: model,
@@ -43467,8 +43480,8 @@ Your response:`;
             content: prompt
           }
         ],
-        temperature: 0.1,
-        max_tokens: 200
+        temperature: 0,
+        max_tokens: 50
       });
 
       const options = {
@@ -43492,26 +43505,70 @@ Your response:`;
           body += chunk;
         });
 
-        res.on('end', () => {
-          try {
-            if (res.statusCode !== 200) {
-              resolve({ error: `API Error ${res.statusCode}` });
-              return;
-            }
+                res.on('end', () => {
+                  try {
+                    if (res.statusCode !== 200) {
+                      // Parse error message from body
+                      let errorMsg = `HTTP ${res.statusCode}`;
+                      try {
+                        const errorData = JSON.parse(body);
+                        if (errorData.error?.message) {
+                          errorMsg = errorData.error.message;
+                        } else if (errorData.message) {
+                          errorMsg = errorData.message;
+                        }
+                      } catch (e) {
+                        // Body wasn't JSON, use generic message
+                      }
+                      
+                      // Stop execution with error
+                      reject(new Error(`API Error ${res.statusCode}: ${errorMsg}`));
+                      return;
+                    }
 
             const response = JSON.parse(body);
             const content = response.choices?.[0]?.message?.content?.trim();
+            
+            // Debug logging
+            if (process.env.DEBUG_LLM === 'true') {
+              console.log('✅ LLM Response:', content);
+            }
             
             if (!content) {
               resolve({ error: 'Empty response' });
               return;
             }
 
-            if (content === 'NO_MATCH') {
+            if (content === 'NO_MATCH' || content.includes('NO_MATCH')) {
               resolve({ match: null });
             } else {
-              // Clean up the response - remove quotes if present
-              const cleanMatch = content.replace(/^["']|["']$/g, '');
+              // Clean up the response - remove quotes, numbers, and extra text
+              let cleanMatch = content.replace(/^["']|["']$/g, '').trim();
+              
+              // If response includes a number prefix (e.g., "5. Login Customizer"), extract just the string
+              const numberMatch = cleanMatch.match(/^\d+\.\s*(.+)/);
+              if (numberMatch) {
+                cleanMatch = numberMatch[1].trim();
+              }
+              
+              // Remove any trailing explanations or comments (text after period, comma, etc.)
+              // But be careful not to break strings that legitimately contain punctuation
+              const firstSentenceEnd = cleanMatch.search(/\.\s+[A-Z]/); // Period followed by space and capital
+              if (firstSentenceEnd > 0) {
+                cleanMatch = cleanMatch.substring(0, firstSentenceEnd).trim();
+              }
+              
+              // Validate: the match should exist in the base strings
+              const matchExists = limitedBaseStrings.some(s => 
+                s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
+                s.includes(cleanMatch) ||
+                cleanMatch.includes(s)
+              );
+              
+              if (!matchExists && process.env.DEBUG_LLM === 'true') {
+                console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
+              }
+              
               resolve({ match: cleanMatch });
             }
           } catch (error) {
@@ -43521,12 +43578,12 @@ Your response:`;
       });
 
       req.on('error', (error) => {
-        resolve({ error: 'Network error' });
+        reject(error);
       });
 
       req.on('timeout', () => {
         req.destroy();
-        resolve({ error: 'Timeout' });
+        reject(new Error('Request timeout'));
       });
 
       req.setTimeout(30000); // 30 second timeout
@@ -43544,7 +43601,21 @@ Your response:`;
    * @returns {Promise<Object>} - { match: 'string' } or { match: null } or { error: 'message' }
    */
   static async findBestMatch(newString, baseEntries, apiKey, model) {
-    if (!apiKey || !newString || !baseEntries || baseEntries.length === 0) {
+    if (!apiKey || !apiKey.trim()) {
+      return { match: null };
+    }
+    
+    // Validate API key format
+    if (!apiKey.startsWith('sk-or-')) {
+      console.warn('OpenRouter API key should start with "sk-or-"');
+      return { error: 'Invalid key format' };
+    }
+    
+    if (!newString || !newString.trim()) {
+      return { match: null };
+    }
+    
+    if (!baseEntries || baseEntries.length === 0) {
       return { match: null };
     }
 
@@ -43552,16 +43623,57 @@ Your response:`;
       // Extract just the msgid strings from base entries
       const baseStrings = baseEntries
         .map(entry => entry.msgid)
-        .filter(msgid => msgid && msgid.trim().length > 0);
+        .filter(msgid => msgid && msgid.trim().length > 0 && msgid.length < 200); // Skip very long strings
 
       if (baseStrings.length === 0) {
         return { match: null };
       }
 
-      const result = await this.callOpenRouter(apiKey, model, newString, baseStrings);
-      return result;
+      // Process in batches - large batches for better context
+      const batchSize = 1000; // Large batches to maximize context
+      const maxBatches = 10; // Limit to 10 batches (10000 strings max) to control API costs
+      
+      for (let i = 0; i < Math.min(maxBatches, Math.ceil(baseStrings.length / batchSize)); i++) {
+        const start = i * batchSize;
+        const end = Math.min(start + batchSize, baseStrings.length);
+        const batch = baseStrings.slice(start, end);
+        
+        if (process.env.DEBUG_LLM === 'true') {
+          console.log(`🔍 Checking batch ${i + 1} (strings ${start + 1}-${end} of ${baseStrings.length})`);
+        }
+        
+        const result = await this.callOpenRouter(apiKey, model, newString, batch);
+        
+        // If we found a match, return it immediately
+        if (result.match) {
+          if (process.env.DEBUG_LLM === 'true') {
+            console.log(`✅ Found match in batch ${i + 1}`);
+          }
+          return result;
+        }
+        
+        // If there was an error, return it
+        if (result.error) {
+          return result;
+        }
+        
+        // Add delay between batches to avoid Cloudflare rate limiting
+        if (i < Math.min(maxBatches, Math.ceil(baseStrings.length / batchSize)) - 1) {
+          const delayMs = 500; // 500ms delay to avoid rate limits
+          if (process.env.DEBUG_LLM === 'true') {
+            console.log(`⏳ Waiting ${delayMs}ms before next batch...`);
+          }
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        
+        // Otherwise continue to next batch
+      }
+      
+      // No match found in any batch
+      return { match: null };
     } catch (error) {
-      return { error: error.message || 'Unknown error' };
+      // Re-throw to stop execution
+      throw error;
     }
   }
 }
@@ -43705,19 +43817,26 @@ class Reporter {
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
         if (openrouterKey && baseEntriesArray.length > 0) {
-          const matchResult = await LLMMatcher.findBestMatch(
-            entry.msgid,
-            baseEntriesArray,
-            openrouterKey,
-            openrouterModel
-          );
-          
-          if (matchResult.error) {
-            suggestedMatch = `LLM Error: ${matchResult.error}`;
-          } else if (matchResult.match) {
-            suggestedMatch = this._truncate(matchResult.match, 40);
-          } else {
-            suggestedMatch = 'No close match';
+          try {
+            const matchResult = await LLMMatcher.findBestMatch(
+              entry.msgid,
+              baseEntriesArray,
+              openrouterKey,
+              openrouterModel
+            );
+            
+            if (matchResult.error) {
+              suggestedMatch = `LLM Error: ${matchResult.error}`;
+            } else if (matchResult.match) {
+              suggestedMatch = this._truncate(matchResult.match, 40);
+            } else {
+              suggestedMatch = 'No close match';
+            }
+            
+            // Small delay between string checks to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            throw error; // Re-throw to stop the action
           }
         }
         
@@ -43814,19 +43933,26 @@ class Reporter {
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
         if (openrouterKey && baseEntriesArray.length > 0) {
-          const matchResult = await LLMMatcher.findBestMatch(
-            target.msgid,
-            baseEntriesArray,
-            openrouterKey,
-            openrouterModel
-          );
-          
-          if (matchResult.error) {
-            suggestedMatch = `LLM Error: ${matchResult.error}`;
-          } else if (matchResult.match) {
-            suggestedMatch = this._truncate(matchResult.match, 40);
-          } else {
-            suggestedMatch = 'No close match';
+          try {
+            const matchResult = await LLMMatcher.findBestMatch(
+              target.msgid,
+              baseEntriesArray,
+              openrouterKey,
+              openrouterModel
+            );
+            
+            if (matchResult.error) {
+              suggestedMatch = `LLM Error: ${matchResult.error}`;
+            } else if (matchResult.match) {
+              suggestedMatch = this._truncate(matchResult.match, 40);
+            } else {
+              suggestedMatch = 'No close match';
+            }
+            
+            // Small delay between string checks to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            throw error; // Re-throw to stop the action
           }
         }
         

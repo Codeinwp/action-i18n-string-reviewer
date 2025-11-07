@@ -128,19 +128,26 @@ class Reporter {
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
         if (openrouterKey && baseEntriesArray.length > 0) {
-          const matchResult = await LLMMatcher.findBestMatch(
-            entry.msgid,
-            baseEntriesArray,
-            openrouterKey,
-            openrouterModel
-          );
-          
-          if (matchResult.error) {
-            suggestedMatch = `LLM Error: ${matchResult.error}`;
-          } else if (matchResult.match) {
-            suggestedMatch = this._truncate(matchResult.match, 40);
-          } else {
-            suggestedMatch = 'No close match';
+          try {
+            const matchResult = await LLMMatcher.findBestMatch(
+              entry.msgid,
+              baseEntriesArray,
+              openrouterKey,
+              openrouterModel
+            );
+            
+            if (matchResult.error) {
+              suggestedMatch = `LLM Error: ${matchResult.error}`;
+            } else if (matchResult.match) {
+              suggestedMatch = this._truncate(matchResult.match, 40);
+            } else {
+              suggestedMatch = 'No close match';
+            }
+            
+            // Small delay between string checks to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            throw error; // Re-throw to stop the action
           }
         }
         
@@ -237,19 +244,26 @@ class Reporter {
         // Get LLM suggestion if enabled
         let suggestedMatch = '-';
         if (openrouterKey && baseEntriesArray.length > 0) {
-          const matchResult = await LLMMatcher.findBestMatch(
-            target.msgid,
-            baseEntriesArray,
-            openrouterKey,
-            openrouterModel
-          );
-          
-          if (matchResult.error) {
-            suggestedMatch = `LLM Error: ${matchResult.error}`;
-          } else if (matchResult.match) {
-            suggestedMatch = this._truncate(matchResult.match, 40);
-          } else {
-            suggestedMatch = 'No close match';
+          try {
+            const matchResult = await LLMMatcher.findBestMatch(
+              target.msgid,
+              baseEntriesArray,
+              openrouterKey,
+              openrouterModel
+            );
+            
+            if (matchResult.error) {
+              suggestedMatch = `LLM Error: ${matchResult.error}`;
+            } else if (matchResult.match) {
+              suggestedMatch = this._truncate(matchResult.match, 40);
+            } else {
+              suggestedMatch = 'No close match';
+            }
+            
+            // Small delay between string checks to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            throw error; // Re-throw to stop the action
           }
         }
         

@@ -254,6 +254,10 @@ msgstr ""
 msgid "Center"
 msgstr ""
 
+#: neve/header-footer-grid/Core/Builder/Abstract_Builder.php:1954
+msgid "Login Customization"
+msgstr ""
+
 #: neve/header-footer-grid/Core/Builder/Abstract_Builder.php:1846
 #: neve/header-footer-grid/Core/Components/Abstract_Component.php:937
 #: neve/inc/customizer/defaults/utils.php:36

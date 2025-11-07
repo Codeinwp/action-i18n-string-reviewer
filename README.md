@@ -117,11 +117,15 @@ npm install
 # Build the action
 npm run build
 
-# Test locally
-env "INPUT_BASE-POT-FILE=examples/base.pot" \
-    "INPUT_TARGET-POT-FILE=examples/target.pot" \
-    "INPUT_FAIL-ON-CHANGES=false" \
-    node dist/index.js
+# Test locally (use Node.js script which handles dashes in env vars)
+./test-local.js
+
+# Test with custom POT files
+./test-local.js path/to/base.pot path/to/target.pot
+
+# Test with LLM enabled
+export OPENROUTER_API_KEY="sk-or-v1-your-key"
+./test-local.js
 ```
 
 ## License
