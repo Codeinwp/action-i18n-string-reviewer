@@ -44120,7 +44120,7 @@ class Reporter {
     }
 
     const lines = [];
-    lines.push('## 🌍 i18n String Review Report\n');
+    lines.push('### 🌍 i18n String Review Report\n');
 
     // Convert baseEntries Map to Array for LLM matcher
     // Include both existing base entries AND removed strings (which are already translated)
@@ -44134,7 +44134,7 @@ class Reporter {
     }
 
     // Summary table
-    lines.push('### 📊 Summary\n');
+    lines.push('#### 📊 Summary\n');
     lines.push('| Category | Count |');
     lines.push('|----------|-------|');
     lines.push(`| ➕ Added | ${results.addedCount} |`);
