@@ -83,14 +83,13 @@ class Reporter {
   }
 
   static async generateMarkdownReport(results, baseEntries, openrouterKey, openrouterModel) {
+    // Return null if there are no changes - no report needed
+    if (results.totalChanges === 0) {
+      return null;
+    }
+
     const lines = [];
     lines.push('## 🌍 i18n String Review Report\n');
-
-    if (results.totalChanges === 0) {
-      lines.push('### ✅ No changes detected\n');
-      lines.push('The POT files are identical.');
-      return lines.join('\n');
-    }
 
     // Convert baseEntries Map to Array for LLM matcher
     // Include both existing base entries AND removed strings (which are already translated)
