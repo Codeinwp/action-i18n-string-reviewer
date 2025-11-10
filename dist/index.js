@@ -43450,89 +43450,183 @@ class LLMCache {
   }
 
   /**
-   * Get cache comment identifier
+   * Get report comment identifier
    */
-  static getCacheCommentIdentifier() {
-    return '<!-- i18n-string-reviewer-llm-cache -->';
+  static getReportCommentIdentifier() {
+    return '### 🌍 i18n String Review Report';
   }
 
   /**
-   * Extract cache data from PR comment
+   * Extract cache data from report comment by parsing markdown tables
    */
   static extractCacheFromComment(commentBody) {
     if (!commentBody) return null;
     
+    const cache = {};
+    let extractedCount = 0;
+    
     try {
-      // Look for cache data between HTML comment markers
-      const startMarker = '<!-- CACHE_DATA_START';
-      const endMarker = 'CACHE_DATA_END -->';
-      const startIdx = commentBody.indexOf(startMarker);
-      const endIdx = commentBody.indexOf(endMarker);
+      // Look for the report identifier
+      if (!commentBody.includes(this.getReportCommentIdentifier())) {
+        return null;
+      }
+
+      // Parse markdown tables to extract String -> Suggested Match mappings
+      // We need to find tables and parse them line by line to avoid regex confusion
       
-      if (startIdx === -1 || endIdx === -1) return null;
+      // Split into lines and process sequentially
+      const lines = commentBody.split('\n');
+      let inAddedTable = false;
+      let inChangedTable = false;
+      let tableColumnCount = 0;
       
-      // Extract the base64 data
-      const dataLine = commentBody.substring(startIdx, endIdx);
-      const base64Match = dataLine.match(/<!-- CACHE_DATA_START\s+(.+?)\s+$/);
-      if (!base64Match) return null;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        // Detect table type
+        if (line.includes('Added Strings')) {
+          inAddedTable = true;
+          inChangedTable = false;
+          continue;
+        } else if (line.includes('Changed Strings')) {
+          inChangedTable = true;
+          inAddedTable = false;
+          continue;
+        } else if (line.includes('Removed Strings')) {
+          inAddedTable = false;
+          inChangedTable = false;
+          continue;
+        } else if (line === '</details>') {
+          inAddedTable = false;
+          inChangedTable = false;
+          continue;
+        }
+        
+        // Skip non-table lines
+        if (!line.startsWith('|') || !line.endsWith('|')) {
+          continue;
+        }
+        
+        // Parse table row
+        const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+        
+        // Skip headers, separators, and footer rows
+        if (cells.length === 0 || 
+            cells[0].includes('---') || 
+            cells[0].includes('String') ||
+            cells[0].includes('**Total**') ||
+            cells[0] === '...') {
+          continue;
+        }
+        
+        // Parse added strings table (4 columns: String | Location | Words | Suggested Match)
+        if (inAddedTable && cells.length >= 4) {
+          const newString = this._unescapeMarkdown(cells[0]);
+          const suggestedMatch = this._unescapeMarkdown(cells[3]);
+          
+          if (this._isValidMatch(newString, suggestedMatch)) {
+            cache[newString] = {
+              newString: newString,
+              match: suggestedMatch
+            };
+            extractedCount++;
+          }
+        }
+        
+        // Parse changed strings table (5 columns: String | Existing | Changed | Words | Suggested Match)
+        else if (inChangedTable && cells.length >= 5) {
+          const newString = this._unescapeMarkdown(cells[0]);
+          const suggestedMatch = this._unescapeMarkdown(cells[4]);
+          
+          if (this._isValidMatch(newString, suggestedMatch)) {
+            cache[newString] = {
+              newString: newString,
+              match: suggestedMatch
+            };
+            extractedCount++;
+          }
+        }
+      }
       
-      // Decode and parse
-      const jsonStr = Buffer.from(base64Match[1], 'base64').toString('utf8');
-      return JSON.parse(jsonStr);
+      if (extractedCount > 0) {
+        console.log(`📦 Extracted ${extractedCount} cached suggestions from existing report`);
+        return cache;
+      }
+      
+      return null;
     } catch (error) {
-      console.warn('⚠️  Failed to extract cache from comment:', error.message);
+      console.warn('⚠️  Failed to extract cache from report comment:', error.message);
       return null;
     }
   }
 
   /**
-   * Create cache comment body
+   * Check if a match is valid and should be cached
    */
-  static createCacheComment(cacheData) {
-    const identifier = LLMCache.getCacheCommentIdentifier();
-    const base64Data = Buffer.from(JSON.stringify(cacheData)).toString('base64');
-    const timestamp = new Date().toISOString();
+  static _isValidMatch(newString, suggestedMatch) {
+    if (!suggestedMatch || !newString) return false;
+    if (suggestedMatch === '-' || suggestedMatch === '...') return false;
+    if (suggestedMatch.startsWith('*')) return false; // Skip *No close match*
+    if (suggestedMatch.startsWith('LLM Error')) return false;
+    if (suggestedMatch.includes('and ') && suggestedMatch.includes('more')) return false; // Skip "and X more"
+    if (newString.length === 0) return false;
     
-    return `${identifier}
-<!-- 
-LLM Cache Data (automatically updated by i18n String Reviewer)
-Last updated: ${timestamp}
-Cache entries: ${Object.keys(cacheData).length}
--->
-<!-- CACHE_DATA_START ${base64Data} CACHE_DATA_END -->`;
+    return true;
   }
 
   /**
-   * Load cache from PR comment or local file
+   * Unescape markdown formatting to get original string
+   */
+  static _unescapeMarkdown(text) {
+    if (!text) return '';
+    
+    // Remove markdown escaping
+    let unescaped = text;
+    const charsToUnescape = ['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!'];
+    for (const char of charsToUnescape) {
+      unescaped = unescaped.split(`\\${char}`).join(char);
+    }
+    
+    // Handle truncation marker
+    if (unescaped.endsWith('...')) {
+      // This string was truncated in the report, we'll match by prefix
+      return unescaped;
+    }
+    
+    return unescaped;
+  }
+
+  /**
+   * Load cache from existing report comment or local file
    */
   async load() {
-    // Try to load from PR comment first (if in PR context)
+    // Try to load from PR report comment first (if in PR context)
     if (this.octokit && this.prContext) {
       try {
         const { owner, repo, pullRequestNumber } = this.prContext;
         
-        // Find existing cache comment
+        // Find existing report comment
         const { data: comments } = await this.octokit.rest.issues.listComments({
           owner,
           repo,
           issue_number: pullRequestNumber,
         });
 
-        const cacheComment = comments.find(comment => 
-          comment.body?.includes(LLMCache.getCacheCommentIdentifier())
+        const reportComment = comments.find(comment => 
+          comment.body?.includes(LLMCache.getReportCommentIdentifier())
         );
 
-        if (cacheComment) {
-          const cacheData = LLMCache.extractCacheFromComment(cacheComment.body);
-          if (cacheData) {
-            this.cache = cacheData;
-            this.cacheCommentId = cacheComment.id;
-            console.log(`📦 Loaded ${Object.keys(this.cache).length} cached LLM results from PR comment`);
+        if (reportComment) {
+          const extractedCache = LLMCache.extractCacheFromComment(reportComment.body);
+          if (extractedCache) {
+            // Convert extracted cache to internal format
+            this.cache = this._convertExtractedCache(extractedCache);
+            console.log(`📦 Loaded ${Object.keys(this.cache).length} cached LLM results from existing report`);
             return;
           }
         }
         
-        console.log('ℹ️  No cache found in PR comments, starting fresh');
+        console.log('ℹ️  No existing report found in PR comments, starting fresh');
       } catch (error) {
         console.warn('⚠️  Failed to load cache from PR comment:', error.message);
       }
@@ -43552,14 +43646,37 @@ Cache entries: ${Object.keys(cacheData).length}
   }
 
   /**
-   * Save cache to PR comment and local file
+   * Convert extracted cache (simple format) to internal format (with model keys)
+   */
+  _convertExtractedCache(extractedCache) {
+    const cache = {};
+    
+    // The extracted cache uses simple string keys, but we need model-specific keys
+    // Since we don't know the model from the comment, we'll create entries for common models
+    // and also add a model-agnostic lookup
+    for (const [newString, data] of Object.entries(extractedCache)) {
+      // Store with a generic key that can be looked up regardless of model
+      // We'll modify the get() method to do fuzzy matching
+      cache[newString] = {
+        newString: data.newString,
+        result: { match: data.match },
+        timestamp: new Date().toISOString(),
+        fromReport: true // Flag to indicate this came from report parsing
+      };
+    }
+    
+    return cache;
+  }
+
+  /**
+   * Save cache to local file only (cache is now embedded in the report)
    */
   async save() {
     if (!this.modified) {
       return; // No changes, skip save
     }
 
-    // Save to local file for debugging
+    // Save to local file for debugging/local runs only
     try {
       const data = JSON.stringify(this.cache, null, 2);
       fs.writeFileSync(this.cacheFilePath, data, 'utf8');
@@ -43568,44 +43685,45 @@ Cache entries: ${Object.keys(cacheData).length}
       console.warn('⚠️  Failed to save LLM cache to file:', error.message);
     }
 
-    // Save to PR comment (if in PR context)
-    if (this.octokit && this.prContext) {
-      try {
-        const { owner, repo, pullRequestNumber } = this.prContext;
-        const commentBody = LLMCache.createCacheComment(this.cache);
-
-        if (this.cacheCommentId) {
-          // Update existing cache comment
-          await this.octokit.rest.issues.updateComment({
-            owner,
-            repo,
-            comment_id: this.cacheCommentId,
-            body: commentBody
-          });
-          console.log(`💾 Updated cache in PR comment (${Object.keys(this.cache).length} entries)`);
-        } else {
-          // Create new cache comment
-          const { data: comment } = await this.octokit.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: pullRequestNumber,
-            body: commentBody
-          });
-          this.cacheCommentId = comment.id;
-          console.log(`💾 Created cache comment in PR (${Object.keys(this.cache).length} entries)`);
-        }
-      } catch (error) {
-        console.warn('⚠️  Failed to save cache to PR comment:', error.message);
-      }
-    }
+    // Note: Cache is now stored within the report comment itself
+    // The "Suggested Match" column in the markdown tables serves as the cache
+    // No separate cache comment is needed
   }
 
   /**
    * Get cached result
+   * Try both model-specific and model-agnostic lookup (for report-extracted cache)
    */
   get(newString, model) {
+    // First try the model-specific key (standard cache)
     const key = LLMCache.generateKey(newString, model);
-    return this.cache[key] || null;
+    if (this.cache[key]) {
+      return this.cache[key];
+    }
+    
+    // Try direct string lookup (for cache extracted from reports)
+    if (this.cache[newString]) {
+      return this.cache[newString];
+    }
+    
+    // Try fuzzy matching for truncated strings
+    for (const [cachedKey, cachedValue] of Object.entries(this.cache)) {
+      if (cachedValue.fromReport && cachedValue.newString) {
+        // Check if the cached string is a truncated version
+        if (cachedValue.newString.endsWith('...')) {
+          const prefix = cachedValue.newString.slice(0, -3);
+          if (newString.startsWith(prefix)) {
+            return cachedValue;
+          }
+        }
+        // Or if the new string matches the beginning of cached string
+        if (newString.length > 40 && cachedValue.newString.startsWith(newString.substring(0, 40))) {
+          return cachedValue;
+        }
+      }
+    }
+    
+    return null;
   }
 
   /**
