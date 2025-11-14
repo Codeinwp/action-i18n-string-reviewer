@@ -25,9 +25,8 @@ class POTEntry {
   }
 
   hasChangedContent(other) {
-    return this.msgidPlural !== other.msgidPlural ||
-           this.comments.translator !== other.comments.translator ||
-           this.comments.extracted !== other.comments.extracted;
+    // Only check actual string content, ignore comments
+    return this.msgidPlural !== other.msgidPlural;
   }
 }
 
