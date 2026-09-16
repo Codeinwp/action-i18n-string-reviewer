@@ -43785,6 +43785,31 @@ class LLMMatcher {
     }
   }
   /**
+   * Reasoning models (OpenAI GPT-5.x, o-series) reject sampling parameters
+   * such as `temperature` with HTTP 400, and spend part of `max_tokens` on
+   * reasoning before the answer. OpenRouter's model list confirms none of the
+   * GPT-5.x ids advertise `temperature` (checked 2026-09-16).
+   * @param {string} model - Model identifier
+   * @returns {boolean}
+   */
+  static isReasoningModel(model) {
+    return /^openai\/(gpt-5|o[1-9])/i.test(model || '');
+  }
+
+  /**
+   * Strip a Markdown code fence from a model reply. Gemini honours the JSON
+   * schema but wraps the object in ```json ... ``` (observed on
+   * gemini-2.5-flash and gemini-3.5-flash-lite, 2026-09-16), which made every
+   * match fail JSON.parse and surface as "LLM Error: Invalid JSON response".
+   * @param {string} content - Raw message content
+   * @returns {string}
+   */
+  static unwrapCodeFence(content) {
+    const match = /^\s*```[a-zA-Z0-9_-]*\s*([\s\S]*?)\s*```\s*$/.exec(content || '');
+    return match ? match[1].trim() : (content || '').trim();
+  }
+
+  /**
    * Call OpenRouter API to find best matching string
    * @param {string} apiKey - OpenRouter API key
    * @param {string} model - Model identifier
@@ -43891,6 +43916,7 @@ OUTPUT REQUIREMENTS:
 - Use the exact text from the provided existing strings list
 - If no suitable match exists, return null`;
 
+      const reasoning = LLMMatcher.isReasoningModel(model);
       const data = JSON.stringify({
         model: model,
         messages: [
@@ -43903,12 +43929,24 @@ OUTPUT REQUIREMENTS:
             content: prompt
           }
         ],
-        temperature: 0,
-        max_tokens: 100,
+        // Reasoning models refuse `temperature`; everything else is pinned to 0
+        // so the same string matches the same way on every run.
+        ...(reasoning ? {} : { temperature: 0 }),
+        // The answer is one short JSON object. Reasoning models count their
+        // hidden reasoning against this budget, so they get room for it.
+        max_tokens: reasoning ? 1000 : 100,
+        // Only route to an endpoint that honours response_format (and the
+        // other parameters sent), instead of one that ignores the schema.
+        provider: {
+          require_parameters: true
+        },
         response_format: {
           type: 'json_schema',
           json_schema: {
             name: 'string_match',
+            // Ask providers with a native strict mode to enforce the schema
+            // exactly (OpenRouter structured-outputs docs).
+            strict: true,
             schema: {
               type: 'object',
               properties: {
@@ -43979,9 +44017,11 @@ OUTPUT REQUIREMENTS:
               return;
             }
 
-            // Parse JSON response
+            // Parse JSON response. Strict structured output should make the
+            // reply bare JSON, but a provider that treats the schema as
+            // guidance may still fence it — unwrap before parsing.
             try {
-              const jsonResponse = JSON.parse(content);
+              const jsonResponse = JSON.parse(LLMMatcher.unwrapCodeFence(content));
               
               if (jsonResponse.match === null || !jsonResponse.match) {
                 resolve({ match: null });

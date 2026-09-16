@@ -42,7 +42,7 @@ jobs:
 | `github-token` | No | `${{ github.token }}` | GitHub token for commenting on PRs |
 | `comment-on-pr` | No | `true` | Whether to comment on pull requests |
 | `openrouter-key` | No | - | OpenRouter API key for LLM string matching |
-| `openrouter-model` | No | `anthropic/claude-3.5-sonnet` | OpenRouter model to use |
+| `openrouter-model` | No | `anthropic/claude-3.5-sonnet` | OpenRouter model to use. Use a plain model id, not a `:batch` variant (those only answer on the Batch API). Requests ask for strict structured output and are routed only to endpoints that honour it; a fenced ```` ```json ```` reply is unwrapped before parsing. OpenAI reasoning models (`openai/gpt-5*`, `openai/o*`) are sent without `temperature` and with a larger token budget. |
 
 ## Outputs
 
