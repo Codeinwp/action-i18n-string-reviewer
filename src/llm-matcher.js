@@ -211,7 +211,11 @@ OUTPUT REQUIREMENTS:
           'Authorization': `Bearer ${apiKey}`,
           'HTTP-Referer': 'https://github.com/Codeinwp/action-i18n-string-reviewer',
           'X-Title': 'i18n String Reviewer',
-          'Content-Length': data.length
+          // Byte length, not string length: `data.length` counts UTF-16 units,
+          // so any non-ASCII character (an em dash, a middle dot, an accented
+          // letter in the new string or the base list) under-declared the body
+          // and the server read a truncated JSON document.
+          'Content-Length': Buffer.byteLength(data, 'utf8')
         }
       };
 
