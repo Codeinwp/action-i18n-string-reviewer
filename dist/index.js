@@ -43569,7 +43569,11 @@ class LLMCache {
     if (suggestedMatch.startsWith('LLM Error')) return false;
     if (suggestedMatch.includes('and ') && suggestedMatch.includes('more')) return false; // Skip "and X more"
     if (newString.length === 0) return false;
-    
+    // A report row whose suggestion is the new string itself was written by
+    // the old matcher (it accepted echoed replies). Reloading it as a cache
+    // hit would pin that noise on every later run of the same PR.
+    if (suggestedMatch.trim().toLowerCase() === newString.trim().toLowerCase()) return false;
+
     return true;
   }
 
