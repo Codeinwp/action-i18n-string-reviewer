@@ -270,23 +270,40 @@ OUTPUT REQUIREMENTS:
                 resolve({ match: null });
               } else {
                 const cleanMatch = jsonResponse.match.trim();
-                
-                // Validate: the match should exist in the base strings
-                const matchExists = limitedBaseStrings.some(s => 
-                  s.trim().toLowerCase() === cleanMatch.toLowerCase() || 
-                  s.includes(cleanMatch) ||
-                  cleanMatch.includes(s)
-                );
-                
+                const normalize = (s) => s.trim().toLowerCase();
+
+                // A reply that only echoes the new string is not a suggestion.
+                // Measured on a real PR: the model answered "%d selected" for
+                // the new string "%d selected", which does not exist in the
+                // base catalogue, and the report showed it as a match.
+                if (normalize(cleanMatch) === normalize(newString)) {
+                  if (process.env.DEBUG_LLM === 'true') {
+                    console.log(`ℹ️  LLM echoed the new string back, treating as no match: "${cleanMatch}"`);
+                  }
+                  resolve({ match: null });
+                  return;
+                }
+
+                // The suggestion must BE an existing string, compared whole.
+                // The previous substring test (`s.includes(cleanMatch) ||
+                // cleanMatch.includes(s)`) let any one-word base string such as
+                // "tool" validate a sentence that merely contained it.
+                const exact = limitedBaseStrings.find(s => normalize(s) === normalize(cleanMatch));
+
+                if (!exact) {
+                  if (process.env.DEBUG_LLM === 'true') {
+                    console.log(`⚠️  LLM returned a string not in the list, treating as no match: "${cleanMatch}"`);
+                  }
+                  resolve({ match: null });
+                  return;
+                }
+
                 if (process.env.DEBUG_LLM === 'true') {
-                  console.log(`✅ Match found: "${cleanMatch}"`);
+                  console.log(`✅ Match found: "${exact}"`);
                 }
-                
-                if (!matchExists && process.env.DEBUG_LLM === 'true') {
-                  console.log(`⚠️  Warning: LLM returned string not in list: "${cleanMatch}"`);
-                }
-                
-                resolve({ match: cleanMatch });
+
+                // Report the base string's own spelling, not the model's copy.
+                resolve({ match: exact });
               }
             } catch (parseError) {
               // Fallback if JSON parsing fails
